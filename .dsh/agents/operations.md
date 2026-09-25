@@ -9,11 +9,14 @@
 
 | 已有 | 说明 |
 | --- | --- |
-| `AGENTS.md` | 索引 + 红线 + 路由表 |
-| `.dsh/agents/` | 11 份主题文档（赛题事实、硬件、架构、视觉、控制、上报、策略、不变量、排查、操作、写法） |
+| `AGENTS.md` | 索引 + 工作方式（分支纪律）+ 红线 + 路由表 |
+| `.dsh/agents/` | 12 份主题文档（赛题事实、硬件、架构、视觉、控制、上报、策略、不变量、排查、操作、写法、参考项目逆向） |
 | `.dsh/logs/` | 开发日志与索引 |
 | `.dsh/skills/dsh-agent-init` | 软链接 → `~/.dsh/skills/dsh-agent-init/`（知识体系自身的方法论） |
+| `.dsh/tools/` | `check-links.py` 链接与锚点校验 |
 | `docs/` | 赛题原始 PDF + 提取出的场地图 |
+| `src/bionic_fish/` | 重构实现的**感知层**：`config`（全部可调参数）、`arena`（合成场地与下视相机）、`vision`（灯带中心线、暗斑候选、起终点黑带） |
+| `tests/` | 28 个行为测试，全部以合成场地为准（`python -m unittest discover -s tests`） |
 
 | 尚无 | 阻塞在哪 |
 | --- | --- |

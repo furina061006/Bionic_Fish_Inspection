@@ -59,11 +59,38 @@ def headings(path: Path) -> set[str]:
     return found
 
 
+def ignored_roots(root: Path) -> set[Path]:
+    """Directory prefixes this repository does not own.
+
+    Reads root-anchored directory rules from ``.gitignore`` (for example
+    ``/reference/``) and always excludes ``.git``.  Third-party trees ship their
+    own broken links; reporting them here would train readers to ignore the
+    check, which is worse than not checking at all.
+    """
+    out = {(root / ".git").resolve()}
+    gitignore = root / ".gitignore"
+    if gitignore.is_file():
+        for line in gitignore.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or line.startswith("!"):
+                continue
+            if line.startswith("/") and line.endswith("/"):
+                out.add((root / line[1:-1]).resolve())
+    return out
+
+
 def main(argv: list[str]) -> int:
     roots = [Path(a) for a in argv[1:]] or [Path.cwd()]
     files: list[Path] = []
     for root in roots:
-        files.extend(sorted(p for p in root.rglob("*.md") if p.is_file()))
+        skip = ignored_roots(root)
+        for path in sorted(root.rglob("*.md")):
+            if not path.is_file():
+                continue
+            resolved = path.resolve()
+            if any(resolved == s or s in resolved.parents for s in skip):
+                continue
+            files.append(path)
 
     heading_cache: dict[Path, set[str]] = {}
     errors: list[str] = []
