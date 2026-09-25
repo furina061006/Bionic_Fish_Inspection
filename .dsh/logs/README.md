@@ -13,3 +13,4 @@
 | 2026-09-25 | [refactor-control-reporting-fsm](2026-09-25-refactor-control-reporting-fsm.md) | 重构控制、上报、状态机与平台层，闭环仿真跑通；弯角仍未通过（可执行的已知失败） |
 | 2026-09-25 | [corner-heading-sign](2026-09-25-corner-heading-sign.md) | 修掉内环航向正反馈等四个结构性缺陷；接入航向源按角度终止；偏左起始可跑完全程 |
 | 2026-09-25 | [day-summary](2026-09-25-day-summary.md) | **收尾**：工具链、模块边界与十条耦合、实测结论；并写明今天的代码是参考实现、后面可能大改 |
+| 2026-09-25 | [skill-repo](2026-09-25-skill-repo.md) | 给 `dsh-agent-init` 技能建独立仓库；仓库根为何选在技能目录（附发现规则的证据） |
