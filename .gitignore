@@ -1,0 +1,19 @@
+# 软链接是种文件形式, 所以最后不要加 ‘ / ’
+/.dsh/skills/dsh-agent-init
+
+# 参考项目：第三方存档（234 个文件，含 2.9MB onnx 与完整 YOLOv5Lite 源码，
+# 有自己的 LICENSE）。只作查阅与工具链依据，不属于本仓库的源码，故不纳入版本控制。
+/reference/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 运行产物：标定记录、落盘帧、状态机轨迹、三道闸日志
+/artefacts/
+/runs/
+*.log
