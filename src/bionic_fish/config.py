@@ -108,6 +108,20 @@ class Calibration:
     #: Width of the start/finish tape band, in pixels.  UNVERIFIED.
     crossline_width_px_lo: float = 60.0
     crossline_width_px_hi: float = 400.0
+    #: Maximum thickness of the tape along the direction of travel, in pixels.
+    #: UNVERIFIED.  A tape is an isolated band a few pixels thick; the dark
+    #: region beyond the pool wall is a large area.  Without this bound, driving
+    #: close to a wall makes the out-of-pool region register as a finish tape.
+    crossline_thickness_px_max: float = 40.0
+    #: Grey level at or below which a pixel counts as tape.  UNVERIFIED.
+    #:
+    #: The tape is detected on absolute darkness rather than on a black-hat
+    #: response.  A black-hat response also fires on the *edges of bright
+    #: structures*, so near the strip it reports the strip's own border as a wide
+    #: dark band - which at a corner looks exactly like a tape crossing.  The
+    #: tape is a genuinely dark object, so a grey threshold separates it from
+    #: both the bright strip and the painted floor without that artefact.
+    tape_max_grey: int = 90
 
     @property
     def mm_per_px(self) -> float:
@@ -336,8 +350,17 @@ class ControlParams:
     discarded the heading it had already measured; the cascade uses it.
     """
 
-    #: Outer-loop proportional gain, PWM-independent (pure angle command).
-    k_lateral: float = 2.0
+    #: Outer-loop proportional gain, as a multiple of the geometrically correct
+    #: pure-pursuit correction.  1.0 is the geometrically exact value: the
+    #: commanded heading is ``atan2(lateral, lookahead)``, the angle that
+    #: actually points at the look-ahead point.
+    #:
+    #: Raising this is tempting and wrong at these look-ahead distances.  At 2.0
+    #: the command saturates for a lateral error of about 35 mm, which is inside
+    #: normal tracking error, so the loop degenerates into bang-bang control -
+    #: the same defect as the reference project's ``pipe1_fast``, whose gains
+    #: saturated beyond 12.5% of the frame width.
+    k_lateral: float = 1.0
     #: Ceiling on the desired heading error, radians.
     max_heading_cmd_rad: float = 0.6
     #: Inner loop gains while tracking a straight section.
@@ -351,12 +374,31 @@ class ControlParams:
     heave_trim_us: float = -90.0
     #: Target strip width in pixels for the visual-servo heave loop.  UNVERIFIED.
     target_strip_width_px: float = 34.0
+    #: Committed yaw offset used while negotiating a bend, microseconds.
+    #:
+    #: A bend cannot be flown on the strip-following loop, because the moment the
+    #: strip leaves the frame there is no heading reference left.  The reference
+    #: project answered this with a pure open-loop timed turn, which cannot adapt
+    #: to battery, current or payload.  Here the turn is committed with a fixed
+    #: command but is *terminated* by re-acquisition or by a time bound, which
+    #: keeps the adaptivity without needing a reference during the turn.
+    #: Magnitude is UNVERIFIED; it only has to saturate the corner gain set.
+    corner_turn_us: float = 45.0
 
     #: Forward PWM per speed state.  Open loop, as in the reference project;
     #: the values are UNVERIFIED.
-    forward_align: int = 1500
+    #:
+    #: ``forward_align`` is a small creep rather than neutral on purpose: a
+    #: tail-fin vehicle steers only while it has way, so aligning at a dead stop
+    #: cannot correct a heading error, and the 30-second "must start moving"
+    #: condition would be at risk while the vehicle waits for a perfect pose.
+    #: ``forward_corner`` is slower than cruise but must keep real way.  On a
+    #: tail-fin vehicle the yaw authority comes from the same motion that
+    #: produces thrust, so commanding a bend at a near stop does not turn the
+    #: vehicle slowly - it barely turns it at all, and the bend times out.
+    forward_align: int = 1512
     forward_cruise: int = 1560
-    forward_corner: int = 1495
+    forward_corner: int = 1525
     forward_search: int = 1555
     forward_finish: int = 1530
     #: Maximum rate of change of the forward command, in microseconds per
@@ -426,6 +468,15 @@ class FsmParams:
     #: then, the run enters LINE_LOST.  DESIGN - the reference project had no
     #: bound here.
     corner_timeout_s: float = 4.0
+    #: Which way the course bends: ``+1`` turns right, ``-1`` turns left.
+    #:
+    #: FACT for this course: the arrows in the competition diagram run east along
+    #: the top, south down the right side, then west along the bottom, so both
+    #: 90 degree bends are right turns for a vehicle travelling in the marked
+    #: direction.  The document also warns that the final layout is the
+    #: organisers', so if a bend turns the other way this value must change; the
+    #: fallback is a bounded two-way search, which costs time but needs no cue.
+    corner_turn_sign: int = 1
     #: Lost-strip escalation thresholds, seconds.
     lost_degrade_s: float = 0.3
     lost_scan_s: float = 2.0
@@ -445,6 +496,31 @@ class FsmParams:
 
 
 @dataclass
+class AnnunciatorParams:
+    """Outward signalling when a report fires.
+
+    The competition requires an acoustic/optical signal and scores a spoken
+    announcement separately, docking 2 points for each leak that is not
+    announced.  In the online format the signal must be legible in the recorded
+    video, so the light has to stay on long enough to survive the camera frame
+    interval and a reviewer's attention.  All timings are UNVERIFIED.
+    """
+
+    #: How long the light stays on after a report, seconds.
+    light_hold_s: float = 1.0
+    #: How long the buzzer sounds, seconds.
+    buzzer_hold_s: float = 0.4
+    #: BCM pin numbers.  UNVERIFIED - the reference project used pin 18 for a
+    #: servo, which says nothing about this platform's wiring.
+    light_pin: int = 23
+    buzzer_pin: int = 24
+    #: Voice announcement.  Must stay matched to what was actually reported.
+    speech_enabled: bool = True
+    buzzer_enabled: bool = True
+    light_enabled: bool = True
+
+
+@dataclass
 class Config:
     """Root configuration object."""
 
@@ -456,6 +532,7 @@ class Config:
     control: ControlParams = field(default_factory=ControlParams)
     safety: SafetyParams = field(default_factory=SafetyParams)
     fsm: FsmParams = field(default_factory=FsmParams)
+    annunciator: AnnunciatorParams = field(default_factory=AnnunciatorParams)
 
     #: MAVLink connection string, e.g. ``/dev/ttyACM0`` or ``udpin:0.0.0.0:14550``.
     #: FACT: the reference platform uses ``/dev/ttyACM0`` at 115200.

@@ -68,6 +68,11 @@ class LineObs:
     confidence: float = 0.0
     #: Fitted centre line as ``(slope, intercept)`` with ``x = slope*row + intercept``.
     fit: tuple[float, float] = (0.0, 0.0)
+    #: Deviation of the strip's far end from the straight-line fit, pixels,
+    #: measured over the forward quarter of the ROI using rows that the robust
+    #: fit discarded.  Positive means the strip branches to the vehicle's right,
+    #: which is the turn direction at a bend.  Zero when there is no bend.
+    branch_px: float = 0.0
     #: Sampled centre points ``(row, x)`` for debugging and replay.
     points: tuple[tuple[float, float], ...] = ()
 
@@ -104,6 +109,9 @@ class MarkerCand:
     fill_ratio: float
     #: Signed lateral offset from the fitted strip centre at this row, pixels.
     lateral_offset_px: float
+    #: False when the strip was not located, so ``lateral_offset_px`` carries no
+    #: information.  A downstream score must not read "no strip" as "centred".
+    lateral_reliable: bool
     #: Black-hat response at the centroid, 0-255.
     contrast: float
 
@@ -117,6 +125,10 @@ class CrossObs:
     row: float = 0.0
     #: Width of the dark band across the strip, in pixels.
     width_px: float = 0.0
+    #: Inclusive row span occupied by the tape, so that marker candidates
+    #: coinciding with it can be rejected as tape rather than reported.
+    row_lo: float = 0.0
+    row_hi: float = 0.0
 
 
 # --------------------------------------------------------------------------- #
@@ -298,6 +310,17 @@ class StripTracker:
             if gap > 1.0:
                 curvature = (math.atan(s_far) - math.atan(s_near)) / gap
 
+        # Branch cue: how far the strip's far end departs from the straight-line
+        # fit, using every row found rather than only the rows the robust fit
+        # kept.  A bend is exactly the case the robust fit throws away, so the
+        # discarded rows are the signal.
+        branch_px = 0.0
+        far_limit = y0 + 0.25 * (y1 - y0)
+        far = row_arr <= far_limit
+        if far.sum() >= 3:
+            mean_row = float(row_arr[far].mean())
+            branch_px = float(x_arr[far].mean() - (slope * mean_row + intercept))
+
         return LineObs(
             valid=True,
             # Forward distance from the vehicle (the image centre row) to the
@@ -311,6 +334,7 @@ class StripTracker:
             support_rows=int(keep.sum()),
             confidence=float(keep.sum() / sampled),
             fit=(float(slope), float(intercept)),
+            branch_px=branch_px,
             points=tuple(zip(row_arr[keep].tolist(), x_arr[keep].tolist())),
         )
 
@@ -387,7 +411,6 @@ class MarkerDetector:
             lateral = u - line.strip_x_at(v) if line.valid else 0.0
             if line.valid and abs(lateral) > max_offset:
                 continue
-
             equiv = math.sqrt(4.0 * area / math.pi)
             radius = max(1, int(round(equiv / 2.0)))
             disc = np.zeros_like(component)
@@ -417,33 +440,40 @@ class MarkerDetector:
                     val=val,
                     fill_ratio=fill_ratio,
                     lateral_offset_px=float(lateral),
+                    lateral_reliable=bool(line.valid),
                     contrast=float(response[int(round(v)), int(round(u))]),
                 )
             )
         return out
 
     def accepts(self, cand: MarkerCand) -> bool:
-        """Apply the configured leak/distractor rule.
+        """Apply the configured leak/distractor rule."""
+        return accepts_marker(cand, self.params, self.calibration)
 
-        The separating feature is unknown, so the rule is a configuration choice
-        rather than an assumption baked into detection.  With
-        ``discriminator == "none"`` nothing is rejected here and the report gate
-        carries the whole burden.
-        """
-        p = self.params
-        if p.discriminator == "none":
-            return True
-        if p.discriminator == "hue":
-            lo, hi = p.hue_band_deg
-            return lo <= cand.hue_deg <= hi
-        if p.discriminator == "pattern":
-            lo, hi = p.fill_ratio_band
-            return lo <= cand.fill_ratio <= hi
-        if p.discriminator == "position":
-            lo, hi = p.offset_band_frac
-            frac = abs(cand.lateral_offset_px) / self.calibration.frame_w
-            return lo <= frac <= hi
-        return True  # pragma: no cover - guarded by Config.validate
+
+def accepts_marker(cand: MarkerCand, params: MarkerParams, calibration: Calibration) -> bool:
+    """Decide whether a candidate is a leak marker rather than a distractor.
+
+    The separating feature is unknown, so the rule is a configuration choice
+    rather than an assumption baked into detection.  With
+    ``discriminator == "none"`` nothing is rejected here and the report gate
+    carries the whole burden.
+    """
+    if params.discriminator == "none":
+        return True
+    if params.discriminator == "hue":
+        lo, hi = params.hue_band_deg
+        return lo <= cand.hue_deg <= hi
+    if params.discriminator == "pattern":
+        lo, hi = params.fill_ratio_band
+        return lo <= cand.fill_ratio <= hi
+    if params.discriminator == "position":
+        lo, hi = params.offset_band_frac
+        if not cand.lateral_reliable:
+            return False
+        frac = abs(cand.lateral_offset_px) / calibration.frame_w
+        return lo <= frac <= hi
+    return True  # pragma: no cover - guarded by Config.validate
 
 
 # --------------------------------------------------------------------------- #
@@ -458,14 +488,18 @@ class CrossLineDetector:
     wider than a marker, and guaranteed to appear.  It is therefore detected
     explicitly and reported with its own observation type, so the report gate can
     give it priority (invariant 6) instead of relying on a size window.
+
+    Detection uses absolute darkness, not a black-hat response.  A black-hat
+    response fires on the edges of bright structures as well as on dark blobs,
+    so beside the strip it reports the strip's own border as a wide dark band;
+    at a corner that artefact is indistinguishable from a tape crossing.  A grey
+    threshold avoids it, because the tape is much darker than both the bright
+    strip and the painted floor.
     """
 
     def __init__(self, params: MarkerParams, calibration: Calibration) -> None:
         self.params = params
         self.calibration = calibration
-        self._kernel = cv2.getStructuringElement(
-            cv2.MORPH_ELLIPSE, (params.blackhat_ksize, params.blackhat_ksize)
-        )
 
     def observe(self, frame: np.ndarray, line: LineObs) -> CrossObs:
         """Return the tape crossing nearest the vehicle.
@@ -478,11 +512,11 @@ class CrossLineDetector:
         """
         cal = self.calibration
         grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        response = cv2.morphologyEx(grey, cv2.MORPH_BLACKHAT, self._kernel)
-        dark = response >= self.params.blackhat_threshold
+        dark = grey <= cal.tape_max_grey
 
         best: tuple[float, float] | None = None
         best_distance = float("inf")
+        passing: dict[int, float] = {}
         for row in range(cal.frame_h):
             centre_x = line.strip_x_at(row) if line.valid else cal.frame_w / 2.0
             col = int(min(max(round(centre_x), 0), cal.frame_w - 1))
@@ -497,16 +531,44 @@ class CrossLineDetector:
             width = float(right - left + 1)
             if not (cal.crossline_width_px_lo <= width <= cal.crossline_width_px_hi):
                 continue
-            # The tape must straddle the strip, not sit on one side of it.
-            if left > centre_x or right < centre_x:
+            # The tape must straddle the strip on both sides, not sit on one
+            # side of it.  A leak marker is dark too, but it is a disc about one
+            # diameter wide and fails this and the width test.
+            margin = cal.strip_width_px
+            if not (left <= centre_x - margin and right >= centre_x + margin):
                 continue
+            passing[row] = width
             distance = abs(row - cal.frame_h / 2.0)
             if distance < best_distance:
                 best_distance = distance
                 best = (float(row), width)
         if best is None:
             return CrossObs(detected=False)
-        return CrossObs(detected=True, row=best[0], width_px=best[1])
+
+        # Expand around the nearest crossing to report the tape's full row span,
+        # which the reporter uses to reject marker candidates that are really
+        # tape.  A bare row index would leave the tape's own thickness exposed.
+        centre_row = int(best[0])
+        row_lo = centre_row
+        while (row_lo - 1) in passing:
+            row_lo -= 1
+        row_hi = centre_row
+        while (row_hi + 1) in passing:
+            row_hi += 1
+
+        # A tape is an isolated band a few pixels thick.  A dark *area* - the
+        # region beyond the pool wall, which the vehicle reaches whenever it
+        # overshoots a bend - spans far more rows, and must not read as tape.
+        if (row_hi - row_lo + 1) > cal.crossline_thickness_px_max:
+            return CrossObs(detected=False)
+
+        return CrossObs(
+            detected=True,
+            row=best[0],
+            width_px=best[1],
+            row_lo=float(row_lo),
+            row_hi=float(row_hi),
+        )
 
 
 def summarise_candidates(cands: Sequence[MarkerCand]) -> str:

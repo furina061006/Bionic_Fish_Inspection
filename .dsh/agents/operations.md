@@ -15,8 +15,8 @@
 | `.dsh/skills/dsh-agent-init` | 软链接 → `~/.dsh/skills/dsh-agent-init/`（知识体系自身的方法论） |
 | `.dsh/tools/` | `check-links.py` 链接与锚点校验 |
 | `docs/` | 赛题原始 PDF + 提取出的场地图 |
-| `src/bionic_fish/` | 重构实现的**感知层**：`config`（全部可调参数）、`arena`（合成场地与下视相机）、`vision`（灯带中心线、暗斑候选、起终点黑带） |
-| `tests/` | 28 个行为测试，全部以合成场地为准（`python -m unittest discover -s tests`） |
+| `src/bionic_fish/` | 重构实现：`config`（全部可调参数）、`arena`（合成场地与下视相机）、`vision`（灯带中心线、暗斑候选、起终点黑带）、`control`（串级纯追踪）、`reporting`（三道闸与概率判决）、`fsm`（状态机与四条硬终止）、`platform`（MAVLink 与声光播报）、`plant`（占位动力学）、`runtime`（组装与主循环） |
+| `tests/` | 87 个测试，全部以合成场地为准；其中 1 个是 `@unittest.expectedFailure`（弯角未跑通）。`python -m unittest discover -s tests` |
 
 | 尚无 | 阻塞在哪 |
 | --- | --- |
