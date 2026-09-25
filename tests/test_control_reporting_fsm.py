@@ -142,6 +142,35 @@ class LineControllerTest(unittest.TestCase):
         self.assertLess(a.yaw_us, self.cfg.channels.neutral)
         self.assertGreater(b.yaw_us, self.cfg.channels.neutral)
 
+    def test_heading_error_sign_is_negative_feedback(self) -> None:
+        """Regression: e_theta is strip-relative, so the loop must not invert.
+
+        A strip that heads to the vehicle's right (positive ``e_theta``) means the
+        vehicle is pointing left of the strip and must turn right.  The
+        obvious-looking ``e_theta_d - e_theta`` inverts this and turns the heading
+        loop into positive feedback; it is invisible when ``e_theta`` is zero,
+        which is why the lateral-offset test above does not catch it.
+        """
+        strip_heads_right = make_line(e_y_px=0.0, e_theta_rad=+0.20)
+        strip_heads_left = make_line(e_y_px=0.0, e_theta_rad=-0.20)
+        self.assertGreater(self.controller.heading_error(strip_heads_right), 0.0)
+        self.assertLess(self.controller.heading_error(strip_heads_left), 0.0)
+
+        self.controller.reset()
+        a = self.controller.step(strip_heads_right, 1500, 0.1, 0.1)
+        self.controller.reset()
+        b = self.controller.step(strip_heads_left, 1500, 0.1, 0.1)
+        self.assertGreater(a.yaw_us, self.cfg.channels.neutral)
+        self.assertLess(b.yaw_us, self.cfg.channels.neutral)
+
+    def test_heading_error_combines_offset_and_heading(self) -> None:
+        """Both cues must push the same way when they agree."""
+        both_right = make_line(e_y_px=+40.0, e_theta_rad=+0.10)
+        offset_only = make_line(e_y_px=+40.0, e_theta_rad=0.0)
+        self.assertGreater(
+            self.controller.heading_error(both_right), self.controller.heading_error(offset_only)
+        )
+
     def test_invalid_line_never_reads_as_centred(self) -> None:
         """e_y = 0 on an invalid observation must not look like perfect alignment."""
         # Establish a strong correction first.
@@ -448,16 +477,35 @@ class StateMachineTest(unittest.TestCase):
         self.assertGreater(decision.yaw_override_us, 0.0)
         self.assertEqual(decision.target_forward_us, self.cfg.control.forward_corner)
 
-    def test_corner_times_out_into_recovery(self) -> None:
+    def test_corner_escalates_to_recovery_and_keeps_turning(self) -> None:
+        """With no heading source the bend searches, reverses, then hands over.
+
+        The committed turn must survive the hand-over: dropping it when the state
+        changes would leave the vehicle stopped part way round a corner and
+        driving at the wall.
+        """
         self.machine.start(0.0)
         self.machine.step(make_line(), None, 0.0)
-        bendy = make_line(confidence=0.2)
-        for step in range(1, self.cfg.fsm.corner_confirm_frames + 1):
-            self.machine.step(bendy, None, step * 0.05)
-        decision = self.machine.step(bendy, None, self.cfg.fsm.corner_timeout_s + 1.0)
+        # A bend that stays un-reacquired: confidence low and a large heading
+        # error, so the re-sighting cue cannot end it.
+        bendy = make_line(confidence=0.2, e_theta_rad=0.9)
+        now = 0.0
+        decision = None
+        for _ in range(self.cfg.fsm.corner_confirm_frames + 1):
+            now += 0.05
+            decision = self.machine.step(bendy, None, now)
+        self.assertIs(decision.state, State.CORNER)
+
+        saw_reversal = False
+        for _ in range(400):
+            now += 0.05
+            decision = self.machine.step(bendy, None, now)
+            if "reversed" in decision.note:
+                saw_reversal = True
+            if decision.state is State.LINE_LOST:
+                break
+        self.assertTrue(saw_reversal, "the search direction was never reversed")
         self.assertIs(decision.state, State.LINE_LOST)
-        # The committed turn survives the loss, otherwise the vehicle would stop
-        # turning part way round and drive at the wall.
         self.assertIsNotNone(decision.yaw_override_us)
 
     def test_losing_the_strip_enters_recovery(self) -> None:

@@ -133,7 +133,9 @@ class Runner:
             cands = self.markers.observe(frame, line)
             cross = self.cross.observe(frame, line)
 
-            decision = self.machine.step(line, cross, now_s, last_forward_us)
+            decision = self.machine.step(
+                line, cross, now_s, last_forward_us, self.link.yaw_rad()
+            )
             events = self.reporter.update(cands, now_s, cross)
             for event in events:
                 log.reports.append(event)
@@ -203,6 +205,13 @@ class Runner:
         )
         plant.set_dt(dt_s)
         self.machine.start(0.0)
+
+        # On the bench the plant's own pose is the only heading that exists, so
+        # offer it to the link.  This makes the angle-based bend termination
+        # testable before an autopilot is available; it does not make the vehicle
+        # model real.
+        if isinstance(self.link, SimLink):
+            self.link.set_heading_source(lambda: plant.yaw_rad)
 
         def frames() -> Iterator[tuple[float, np.ndarray]]:
             step = 0

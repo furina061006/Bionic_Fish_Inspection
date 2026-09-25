@@ -23,7 +23,7 @@ autopilot and no GPIO.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Callable, Protocol
 
 from .config import AnnunciatorParams, ChannelMap
 from .control import Actuator
@@ -50,6 +50,10 @@ class Link(Protocol):
         """Transmit one control frame."""
         ...
 
+    def yaw_rad(self) -> float | None:
+        """Current heading in radians, or ``None`` when unavailable."""
+        ...
+
     def close(self) -> None:
         """Release the connection."""
         ...
@@ -61,12 +65,18 @@ class SimLink:
     Used for offline runs and tests.  It is the only backend that can be used
     when no autopilot is attached, which is the normal state on the development
     machine.
+
+    ``heading_fn`` optionally supplies a heading, which lets the closed loop
+    exercise the angle-based bend termination without an autopilot.  That does
+    not make the vehicle model real - it only removes the *heading source* from
+    the list of things that must exist before the bend logic can be tested.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, heading_fn: "Callable[[], float] | None" = None) -> None:
         self.sent: list[Actuator] = []
         self.armed = False
         self.closed = False
+        self._heading_fn = heading_fn
 
     def arm(self) -> bool:
         """Record the arm request."""
@@ -80,6 +90,14 @@ class SimLink:
     def send(self, actuator: Actuator) -> None:
         """Record one control frame."""
         self.sent.append(actuator)
+
+    def yaw_rad(self) -> float | None:
+        """Return the injected heading, or ``None``."""
+        return None if self._heading_fn is None else float(self._heading_fn())
+
+    def set_heading_source(self, heading_fn: "Callable[[], float] | None") -> None:
+        """Inject a heading source, for bench runs and tests."""
+        self._heading_fn = heading_fn
 
     def close(self) -> None:
         """Mark the link closed."""
@@ -106,13 +124,17 @@ class MavlinkLink:
         channels: ChannelMap,
         *,
         ack_timeout_s: float = 5.0,
+        attitude_timeout_s: float = 0.5,
     ) -> None:
         self.device = device
         self.baud = baud
         self.channels = channels
         self.ack_timeout_s = ack_timeout_s
+        self.attitude_timeout_s = attitude_timeout_s
         self._master = None
         self._mavlink = None
+        self._yaw: float | None = None
+        self._yaw_at: float | None = None
 
     # ------------------------------------------------------------- connection
 
@@ -240,6 +262,36 @@ class MavlinkLink:
         self._override(
             {self.channels.lights: self.channels.lights_on if on else self.channels.lights_off}
         )
+
+    def yaw_rad(self) -> float | None:
+        """Most recent heading from ``ATTITUDE``, or ``None`` if stale.
+
+        The same connection carries control output and telemetry on purpose: a
+        MAVLink stream has exactly one reader, so the reference project's habit of
+        opening a second connection for telemetry would have raced this one for
+        messages.
+
+        A stale heading returns ``None`` rather than the last value, so the state
+        machine falls back to its time-bounded turn instead of turning on a
+        frozen measurement.
+        """
+        import time
+
+        if self._master is None:
+            return None
+        # Drain everything queued so the newest attitude wins; a control loop
+        # must never act on a backlog.
+        while True:
+            message = self._master.recv_match(type="ATTITUDE", blocking=False)
+            if message is None:
+                break
+            self._yaw = float(getattr(message, "yaw", 0.0))
+            self._yaw_at = time.monotonic()
+        if self._yaw is None or self._yaw_at is None:
+            return None
+        if time.monotonic() - self._yaw_at > self.attitude_timeout_s:
+            return None
+        return self._yaw
 
     def close(self) -> None:
         """Close the serial connection if it was opened."""

@@ -372,8 +372,14 @@ class ControlParams:
     heave_gain: GainSet = field(default_factory=lambda: GainSet(5.0, 0.0, 0.0, 20.0))
     #: Neutral offset for the heave channel; the reference project sat here.
     heave_trim_us: float = -90.0
-    #: Target strip width in pixels for the visual-servo heave loop.  UNVERIFIED.
-    target_strip_width_px: float = 34.0
+    #: Target strip width in pixels for the visual-servo heave loop.  It should
+    #: be set to the measured strip width on site; the value here corresponds to
+    #: the default calibration (24 mm at 1.25 mm/px).
+    #:
+    #: Do not confuse this with the reference project's ``ud_pid.calculate(34,
+    #: mean)``: there ``mean`` was a 0-150 binary fill ratio, not a pixel width.
+    #: Carrying that 34 across as a pixel width would command a permanent descent.
+    target_strip_width_px: float = 19.2
     #: Committed yaw offset used while negotiating a bend, microseconds.
     #:
     #: A bend cannot be flown on the strip-following loop, because the moment the
@@ -477,6 +483,29 @@ class FsmParams:
     #: organisers', so if a bend turns the other way this value must change; the
     #: fallback is a bounded two-way search, which costs time but needs no cue.
     corner_turn_sign: int = 1
+    #: Angle a bend turns through, radians.  FACT: the document describes the
+    #: route as having 90 degree corners.
+    corner_target_angle_rad: float = math.pi / 2.0
+    #: Tolerance on the achieved turn angle, radians.
+    corner_angle_tolerance_rad: float = 0.20
+    #: Minimum time committed to a bend before a re-sighting may end it.
+    #:
+    #: Without this the bend ends the instant the strip is seen again on the
+    #: straight approach, which is exactly the failure observed in the closed
+    #: loop: the bend "clears" while the vehicle is still on the straight, and it
+    #: then drives straight through the corner.
+    corner_min_commit_s: float = 0.35
+    #: With no heading source, how long to hold one turn direction before
+    #: reversing.  A two-way search costs time but needs no bend-direction cue.
+    corner_search_s: float = 1.6
+    #: Time after a bend completes during which the corner cue is ignored.
+    #:
+    #: Immediately after a 90 degree bend the strip is still exiting the frame
+    #: sideways, so the cue that declared the bend is still true.  Without a
+    #: refractory period the machine declares a *second* bend and turns another
+    #: 90 degrees, driving away from the route.  This is the closed-loop failure
+    #: observed in the synthetic arena.
+    corner_refractory_s: float = 2.0
     #: Lost-strip escalation thresholds, seconds.
     lost_degrade_s: float = 0.3
     lost_scan_s: float = 2.0

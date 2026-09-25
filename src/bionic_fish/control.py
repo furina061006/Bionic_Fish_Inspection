@@ -142,16 +142,41 @@ class LineController:
     # ------------------------------------------------------------------ lateral
 
     def desired_heading(self, line: LineObs) -> float:
-        """Pure-pursuit heading that would bring the vehicle onto the strip.
+        """Pure-pursuit correction that would bring the vehicle onto the strip.
 
-        ``atan2(lateral, lookahead)`` is the exact angle to the look-ahead point,
-        so the gain has units of "fraction of the geometrically correct
-        correction" rather than an arbitrary scale factor.
+        The sign follows the project-wide convention: positive means "to the
+        vehicle's right".  ``atan2(lateral, lookahead)`` is the exact angle to
+        the look-ahead point, so the gain has units of "fraction of the
+        geometrically correct correction" rather than an arbitrary scale factor.
+
+        Note what this is *not*: it is a correction **relative to the strip**, not
+        an absolute heading.  Combining it with ``e_theta`` correctly is the
+        subject of :meth:`heading_error`.
         """
         geometric = math.atan2(line.e_y_px, max(1.0, line.lookahead_px))
         commanded = self.params.k_lateral * geometric
         limit = self.params.max_heading_cmd_rad
         return max(-limit, min(limit, commanded))
+
+    def heading_error(self, line: LineObs) -> float:
+        """Yaw error whose sign means "rotate this way", radians.
+
+        ``LineObs.e_theta_rad`` is the strip direction **minus** the vehicle
+        heading, so it is a strip-relative-to-vehicle angle: positive means the
+        strip heads to the vehicle's right.  The heading the vehicle must reach
+        is therefore (strip direction + the pure-pursuit correction), and the
+        error to drive out is::
+
+            (psi_strip + e_theta_d) - psi_vehicle  ==  e_theta + e_theta_d
+
+        Subtracting the two, which is the obvious-looking form, gives
+        ``e_theta_d - e_theta`` and makes the heading loop *positive feedback*:
+        a vehicle pointing to the right of the strip would be commanded further
+        right.  That inversion is invisible on a straight run with a lateral
+        offset, because there ``e_theta`` is zero and both forms agree - which is
+        exactly how it survived the first round of testing.
+        """
+        return self.desired_heading(line) + line.e_theta_rad
 
     def steer_offset(self, line: LineObs, now_s: float, corner: bool) -> float:
         """Yaw offset from neutral, microseconds."""
@@ -162,8 +187,7 @@ class LineController:
             self.yaw.gains = self.params.yaw_corner if corner else self.params.yaw_follow
             self.yaw.reset()
 
-        error = self.desired_heading(line) - line.e_theta_rad
-        return self.yaw.step(error, now_s)
+        return self.yaw.step(self.heading_error(line), now_s)
 
     # -------------------------------------------------------------------- heave
 

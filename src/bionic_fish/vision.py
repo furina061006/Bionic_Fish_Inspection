@@ -511,6 +511,14 @@ class CrossLineDetector:
         the vehicle.
         """
         cal = self.calibration
+        if not line.valid:
+            # A crossing is defined relative to the strip, so without the strip
+            # there is nothing to cross.  Falling back to the frame centre makes
+            # any dark region that happens to straddle the middle a "tape", which
+            # is exactly how the out-of-pool region produced a false finish when
+            # the vehicle drifted near a wall with the strip out of view.
+            return CrossObs(detected=False)
+
         grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         dark = grey <= cal.tape_max_grey
 
@@ -518,7 +526,7 @@ class CrossLineDetector:
         best_distance = float("inf")
         passing: dict[int, float] = {}
         for row in range(cal.frame_h):
-            centre_x = line.strip_x_at(row) if line.valid else cal.frame_w / 2.0
+            centre_x = line.strip_x_at(row)
             col = int(min(max(round(centre_x), 0), cal.frame_w - 1))
             if not dark[row, col]:
                 continue
@@ -560,6 +568,15 @@ class CrossLineDetector:
         # region beyond the pool wall, which the vehicle reaches whenever it
         # overshoots a bend - spans far more rows, and must not read as tape.
         if (row_hi - row_lo + 1) > cal.crossline_thickness_px_max:
+            return CrossObs(detected=False)
+
+        # The band must also be interior.  A dark region clipped by the frame edge
+        # can be only a few rows tall while still being an area, not a band, and
+        # that is how the out-of-pool region produced a false finish: driving near
+        # the wall, the top rows of the frame are outside the pool.  Beyond a real
+        # tape there is always floor or strip on both sides along the direction of
+        # travel, so a genuine crossing never touches the border.
+        if row_lo <= 0 or row_hi >= cal.frame_h - 1:
             return CrossObs(detected=False)
 
         return CrossObs(

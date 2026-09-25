@@ -98,6 +98,22 @@ class ClosedLoopTest(unittest.TestCase):
         self.assertGreaterEqual(log.gate_stats["tracks_created"], len(log.reports))
         self.assertEqual(log.gate_stats["reports"], len(log.reports))
 
+    def test_completes_from_a_left_offset(self) -> None:
+        """From a 30 mm left offset the whole route completes.
+
+        This is the strongest end-to-end assertion available today: perception,
+        the report gate, the state machine, both 90 degree bends, control and
+        signalling all have to work together for it to pass.  It is also the
+        regression guard for the inner-loop heading sign, whose inversion left
+        the vehicle unable to hold a heading after a bend.
+        """
+        runner, log = self._run(lateral_mm=-30.0)
+        self.assertTrue(log.finished, f"ended at {log.states[-1]} abort={log.abort}")
+        arc = self.arena.spec.arc_length_of(log.final_pose[0], log.final_pose[1])
+        self.assertGreater(arc, self.arena.spec.path_length_mm * 0.9)
+        self.assertGreaterEqual(len(log.reports), 6)
+        self.assertEqual(len(log.announcements), len(log.reports))
+
     def test_gate_counters_expose_rejections(self) -> None:
         """Diagnosability: a missed marker must be attributable to a gate."""
         _, log = self._run()
@@ -125,31 +141,35 @@ class ClosedLoopTest(unittest.TestCase):
 
     @unittest.expectedFailure
     def test_completes_the_whole_course(self) -> None:
-        """KNOWN FAILURE: the vehicle does not yet negotiate the 90 degree bends.
+        """KNOWN FAILURE: course completion depends on the start offset.
 
-        Current behaviour, measured on the synthetic arena with the placeholder
-        vehicle model: the vehicle tracks the first straight well (lateral error
-        a few pixels), reaches the bend, commits to the turn, over-rotates and
-        leaves the route; the run then ends on the inferred wall-contact limit or
-        on a spurious finish.
+        Measured on the synthetic arena with the placeholder vehicle model: from
+        a 30 mm offset to the left the run completes the whole 5 m route and
+        reports all 8 leaks; from the centre or to the right it reaches about 69%
+        and ends on the inferred wall-contact limit.
 
-        This is deliberately an executable record rather than a comment.  When it
-        starts passing, unittest reports an unexpected success and this marker
-        must be removed, together with the corresponding entry in
-        `.dsh/agents/control.md`.
+        Progress on this has been structural rather than numerical.  The bends
+        now complete: the inner loop's heading sign was inverted (``e_theta`` is
+        strip-relative, so the error is ``e_theta + e_theta_d``, not the
+        obvious-looking difference); the bend is advanced independently of the
+        state so a mid-corner strip loss cannot disable its termination; it ends
+        by measured angle when a heading source exists; and a refractory period
+        stops it declaring a second bend immediately after the first.
 
-        What is needed before it can pass:
+        What remains is the second bend's robustness across entry conditions,
+        which still needs:
 
-        1. measured vehicle dynamics, because every gain and the committed turn
-           length currently depend on placeholder numbers - tuning against them
-           would be fitting to fiction;
-        2. a turn-termination cue that works once the strip has left the frame
-           and no heading reference remains, rather than a fixed time bound;
-        3. confirmation of the bend geometry and of the turn direction, which is
-           currently assumed from the diagram's arrows.
+        1. measured vehicle dynamics - the committed turn length and the corner
+           gains currently derive from placeholder numbers;
+        2. confirmation of the second bend's geometry and of the turn direction,
+           which is assumed from the diagram's arrows;
+        3. a heading source on the real vehicle, otherwise the fallback search
+           costs time the 150-second budget may not have.
 
-        Marking this expected-failure keeps the suite green for the parts that
-        are verified while making the gap impossible to overlook.
+        Marking this expected-failure keeps the suite green for everything that
+        is verified while making the gap impossible to overlook.  When it starts
+        passing, unittest reports an unexpected success and this marker must be
+        removed along with the open item in `.dsh/agents/control.md`.
         """
         _, log = self._run()
         self.assertTrue(log.finished, f"run ended at {log.states[-1]} abort={log.abort}")

@@ -25,11 +25,17 @@ margins without reading a log.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from enum import Enum
 
 from .config import ChannelMap, ControlParams, FsmParams, SafetyParams
 from .vision import CrossObs, LineObs
+
+
+def wrap_pi(angle_rad: float) -> float:
+    """Wrap an angle into ``(-pi, pi]``."""
+    return (angle_rad + math.pi) % (2.0 * math.pi) - math.pi
 
 
 class State(str, Enum):
@@ -219,7 +225,58 @@ class StateMachine:
         self._state_since: float | None = None
         self._finish_since: float | None = None
         self._lost_from_corner = False
+        self._turn_direction = self.params.corner_turn_sign
+        self._turn_start_yaw: float | None = None
+        self._turn_phase_since: float | None = None
+        self._turn_reversed = False
+        self._bend_active = False
+        self._bend_since: float | None = None
+        self._bend_finished_at: float | None = None
         self._note = "waiting for the start command"
+
+    # --------------------------------------------------------------------- turn
+
+    def _begin_turn(self, yaw_rad: float | None, now_s: float) -> None:
+        """Start a bend: pick a direction and remember the heading it began at.
+
+        With a heading source the bend can be ended by angle, which is the only
+        termination that does not depend on the strip being visible.  Without
+        one, the direction is searched and the time bound is the only limit.
+        """
+        self._turn_direction = self.params.corner_turn_sign
+        self._turn_start_yaw = yaw_rad
+        self._turn_phase_since = now_s
+        self._turn_reversed = False
+        self._bend_active = True
+        self._bend_since = now_s
+
+    def _finish_bend(self, line: LineObs, now_s: float, note: str) -> None:
+        """End the committed turn and hand back to strip following."""
+        self._bend_active = False
+        self._lost_from_corner = False
+        self._corner_hits = 0
+        self._turn_start_yaw = None
+        self._bend_finished_at = now_s
+        if line.valid:
+            self._enter(State.FOLLOW, now_s, note)
+        else:
+            self._enter(State.LINE_LOST, now_s, f"{note}; strip not visible")
+
+    def _in_bend_refractory(self, now_s: float) -> bool:
+        """Whether a just-completed bend still suppresses the corner cue."""
+        if self._bend_finished_at is None:
+            return False
+        return now_s - self._bend_finished_at < self.params.corner_refractory_s
+
+    def _turned_rad(self, yaw_rad: float | None) -> float | None:
+        """Heading change since the bend began, signed into the turn direction.
+
+        ``None`` when no heading source is available, which the caller must treat
+        as "unknown", never as "no turn yet made".
+        """
+        if yaw_rad is None or self._turn_start_yaw is None:
+            return None
+        return wrap_pi(yaw_rad - self._turn_start_yaw) * self._turn_direction
 
     # ------------------------------------------------------------------ control
 
@@ -267,11 +324,14 @@ class StateMachine:
         cross: CrossObs | None,
         now_s: float,
         commanded_forward_us: int | None = None,
+        yaw_rad: float | None = None,
     ) -> Decision:
         """Advance the state machine by one frame.
 
         ``commanded_forward_us`` is the actuator value actually sent on the
         previous frame, used only to decide whether the vehicle has started.
+        ``yaw_rad`` is the current heading when a source exists; without one the
+        bend falls back to a time-bounded two-way search.
         """
         c = self.control
         neutral = self.channels.neutral
@@ -311,27 +371,33 @@ class StateMachine:
         if self.state in (State.FOLLOW, State.CORNER, State.LINE_LOST):
             if not line.valid:
                 if self.state is not State.LINE_LOST:
-                    self._lost_from_corner = self.state is State.CORNER
+                    # A bend keeps running across the loss.  The strip always
+                    # disappears part way round a 90 degree corner, and if that
+                    # cleared the bend the committed turn would never be ended.
+                    self._lost_from_corner = self._bend_active
                     self._corner_hits = 0
                     self._enter(State.LINE_LOST, now_s, "strip lost")
             elif self.state is State.LINE_LOST:
                 self._corner_hits = 0
-                self._lost_from_corner = False
-                self._enter(State.FOLLOW, now_s, "strip reacquired")
+                if not self._bend_active:
+                    self._lost_from_corner = False
+                    self._enter(State.FOLLOW, now_s, "strip reacquired")
             elif self.state is State.FOLLOW:
-                if self._corner_cue(line):
+                if self._in_bend_refractory(now_s):
+                    self._corner_hits = 0
+                elif self._corner_cue(line):
                     self._corner_hits += 1
                     if self._corner_hits >= self.params.corner_confirm_frames:
                         self._enter(State.CORNER, now_s, "bend confirmed")
+                        self._begin_turn(yaw_rad, now_s)
                 else:
                     self._corner_hits = 0
-            elif self.state is State.CORNER:
-                if self._time_in_state(now_s) >= self.params.corner_timeout_s:
-                    self._lost_from_corner = True
-                    self._enter(State.LINE_LOST, now_s, "bend not completed in time")
-                elif abs(line.e_theta_rad) <= self.params.align_heading_tol_rad:
-                    self._corner_hits = 0
-                    self._enter(State.FOLLOW, now_s, "bend cleared")
+
+        # Advancing the bend is deliberately independent of the state, so that a
+        # strip loss mid-corner cannot disable the termination that stops the
+        # turn.
+        if self._bend_active:
+            self._advance_bend(line, yaw_rad, now_s)
 
         # Finish acceptance needs context: the start tape looks identical, so a
         # cross line only counts once the vehicle has been running long enough to
@@ -364,6 +430,62 @@ class StateMachine:
             yaw_override_us=self._yaw_override(),
         )
 
+    def _advance_bend(self, line: LineObs, yaw_rad: float | None, now_s: float) -> None:
+        """Decide whether the bend is finished, reversed, or out of time.
+
+        Termination is tried in order of trustworthiness:
+
+        1. **by angle**, when a heading source exists: the document states the
+           corners are 90 degrees, so a measured 90 degree change ends the bend
+           regardless of what the camera sees;
+        2. **by re-sighting**, but only after a minimum commitment, because on the
+           straight approach the strip is re-seen immediately and ending there
+           means driving straight through the corner;
+        3. **by reversing the search** once, when there is no heading source;
+        4. **by the time bound**, which hands over to the recovery state.
+        """
+        turned = self._turned_rad(yaw_rad)
+        committed = self._time_in_state(now_s) >= self.params.corner_min_commit_s
+        bend_elapsed = now_s - (self._bend_since if self._bend_since is not None else now_s)
+
+        angle_done = (
+            turned is not None
+            and turned
+            >= self.params.corner_target_angle_rad - self.params.corner_angle_tolerance_rad
+        )
+        if angle_done:
+            self._finish_bend(line, now_s, "bend complete by angle")
+            return
+
+        if turned is None:
+            # No heading reference, so fall back to less trustworthy cues.
+            #
+            # With a heading source this branch is skipped on purpose.  Near a
+            # corner the strip is an L in the frame, and the row-scan fit can
+            # latch onto the outgoing straight from the previous leg, reporting a
+            # small ``e_theta`` while the vehicle has turned only a few degrees.
+            # Accepting that as "bend cleared" ends the turn almost immediately
+            # and the vehicle drives straight past the corner - the failure
+            # observed in the closed loop.
+            if committed and abs(line.e_theta_rad) <= self.params.align_heading_tol_rad:
+                self._finish_bend(line, now_s, "bend cleared")
+                return
+
+            if (
+                not self._turn_reversed
+                and self._turn_phase_since is not None
+                and now_s - self._turn_phase_since >= self.params.corner_search_s
+            ):
+                self._turn_direction = -self._turn_direction
+                self._turn_reversed = True
+                self._turn_phase_since = now_s
+                self._note = "bend: reversed the search direction"
+                return
+
+        if bend_elapsed >= self.params.corner_timeout_s and self.state is State.CORNER:
+            self._lost_from_corner = True
+            self._enter(State.LINE_LOST, now_s, "bend not completed in time")
+
     def _yaw_override(self) -> float | None:
         """The committed turn command, when a bend must be flown blind.
 
@@ -375,9 +497,9 @@ class StateMachine:
         """
         c = self.control
         if self.state is State.CORNER:
-            return self.params.corner_turn_sign * c.corner_turn_us
+            return self._turn_direction * c.corner_turn_us
         if self.state is State.LINE_LOST and self._lost_from_corner:
-            return self.params.corner_turn_sign * c.corner_turn_us
+            return self._turn_direction * c.corner_turn_us
         return None
 
     def _forward_target(self, now_s: float) -> int:
