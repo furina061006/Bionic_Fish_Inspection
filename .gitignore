@@ -54,6 +54,13 @@ htmlcov/
 *.pem
 *.key
 
+# ─────────────────────── 智能体指令的本机覆盖层 ─────────────────────────
+# DSH 除 AGENTS.md / CLAUDE.md 外，还加载同名的 .local 覆盖层
+# （agent-instructions 的 DEFAULT_LOCAL_INSTRUCTION_FILE_CANDIDATES）。
+# 那是「给智能体的本机指令」，不是项目事实，故不入库。
+AGENTS.local.md
+CLAUDE.local.md
+
 # ─────────────────────────── 编辑器 / 操作系统 ───────────────────────────
 # 若队里想共享 launch.json / settings.json，在下面加 ! 例外。
 .vscode/

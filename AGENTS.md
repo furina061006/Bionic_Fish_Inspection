@@ -48,6 +48,7 @@
 | 排查「跑偏 / 丢线 / 漏检 / 误报 / 弯角过不去」 | [`.dsh/agents/troubleshooting.md`](.dsh/agents/troubleshooting.md) |
 | 搭环境、标定、仿真、比赛日流程与清单 | [`.dsh/agents/operations.md`](.dsh/agents/operations.md) |
 | 写 / 改 Markdown 文档（加粗、标记约定等写法） | [`.dsh/agents/writing.md`](.dsh/agents/writing.md) |
+| 回答「项目怎么跑、该改哪个文件」（给人看的口径） | [`README.md`](README.md) |
 | 想知道「现在卡在哪、下一步要问谁」 | [`backlog.md`](backlog.md) |
 | 想知道「为什么这么定」「踩过什么坑」 | [`.dsh/logs/README.md`](.dsh/logs/README.md) |
 
@@ -55,7 +56,8 @@
 
 | 路径 | 职责 |
 | --- | --- |
-| `AGENTS.md` | 本文件：索引 + 工作方式 + 红线 + 路由表 |
+| `AGENTS.md` | 本文件：索引 + 工作方式 + 红线 + 路由表 + 目录结构（**给智能体**） |
+| `README.md` | 开发者入口：架构总览、`.dsh/` 与 `AGENTS.md` 的用法、`src/` 各模块职责、怎么跑（**给人**） |
 | `backlog.md` | 已知但未完成的事，按「卡住什么」分组 |
 | `.gitignore` | 什么不进版本控制，以及为什么 |
 | `.dsh/agents/` | 分主题的项目事实、设计决定、不变量、排查流程 |
@@ -86,6 +88,7 @@
 
 ## 相关文档
 
+- [`README.md`](README.md)——**给人**的开发者入口：架构总览、`.dsh/` 与 `AGENTS.md` 怎么用、`src/` 各模块职责、怎么跑
 - `.dsh/agents/`——赛题事实、硬件约束、架构、视觉、控制、上报、策略、不变量、排查、操作、写法
 - `.dsh/logs/README.md`——开发日志索引
 - `.dsh/skills/dsh-agent-init/SKILL.md`——**本知识体系自身的方法论**，用同样的方式给新项目初始化 `.dsh/`
