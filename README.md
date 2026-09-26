@@ -185,7 +185,13 @@ python3 .dsh/tools/check-links.py .
 
 ## 六、动手前的约定
 
-1. **git 分支纪律**：开发在 `dsh` 分支，`main` 保持现状；**合并到 `main` 需明确确认**。每次提交前跑 `git branch --show-current`——工作区可能与另一个终端共享。
+1. **git 分支纪律**：开发在 `dsh` 分支，`main` 保持现状；**合并到 `main` 需明确确认**。提交前把分支检查**当闸门**用，而不是打印一行就继续：
+
+   ```sh
+   [ "$(git branch --show-current)" = dsh ] || { echo "不在 dsh，中止"; exit 1; }
+   ```
+
+   工作区与另一个终端共享，HEAD 会被切走。「打印一行再继续」不算检查——2026-09-26 就这么把一次提交落到过 `main` 上，见 [`.dsh/logs/2026-09-26-branch-gate.md`](.dsh/logs/2026-09-26-branch-gate.md)。
 2. **阈值不许硬编码**：所有部署相关数字进 `config.py`，物理量阈值必须能追溯到标定（[不变量 7](.dsh/agents/invariants.md)）。
 3. **`valid=false` 不等于 0**：绝不用 0 冒充「没看到」（[不变量 3](.dsh/agents/invariants.md)）。
 4. **改完回写文档**：先 `.dsh/agents/` → 再 `.dsh/logs/` → 再日志索引。
