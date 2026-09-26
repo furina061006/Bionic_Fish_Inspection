@@ -34,7 +34,14 @@ def strip_fences(text: str) -> str:
 
 
 def slugify(heading: str) -> str:
-    """Approximate GitHub's heading anchor: keep letters, numbers, marks, '-' and '_'."""
+    """Approximate GitHub's heading anchor: keep letters, numbers, marks, '-' and '_'.
+
+    Whitespace becomes one hyphen **per character**, not one per run.  A heading
+    containing ``A + B`` therefore slugs to ``a--b`` rather than ``a-b``: the
+    ``+`` is punctuation and is deleted, leaving two adjacent spaces, and each
+    becomes its own hyphen.  Collapsing runs here would reject correct anchors
+    and accept incorrect ones.
+    """
     text = heading.strip().lower()
     text = re.sub(r"`([^`]*)`", r"\1", text)
     text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
@@ -45,8 +52,9 @@ def slugify(heading: str) -> str:
         if category in ("L", "N", "M") or ch in KEEP_PUNCT:
             kept.append(ch)
         elif ch.isspace():
-            kept.append(" ")
-    return re.sub(r"\s+", "-", "".join(kept)).strip("-")
+            kept.append("-")
+        # Other punctuation and symbols are deleted, as the slugger does.
+    return "".join(kept).strip("-")
 
 
 def headings(path: Path) -> set[str]:
