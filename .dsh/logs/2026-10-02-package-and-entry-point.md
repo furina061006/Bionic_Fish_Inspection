@@ -102,7 +102,7 @@ states: FOLLOW 69.7%  LINE_LOST 13.1%  CORNER 7.3%  ALIGN 5.5%  FINISH_APPR 4.3%
 
 ## 六、留下的口子
 
-- `pip install -e .` **没有实际执行**（只验证了 wheel 能构建）。真正装上之后 `PYTHONPATH=src` 可以从文档里去掉
+- ~~`pip install -e .` 没有实际执行~~ → **已补做**：执行后验证了「不带 `PYTHONPATH` 从任意目录」四条路径全部可用（`python -m bionic_fish`、`bionic-fish` 脚本、`python -m unittest discover -s tests`、90 个测试仍全绿）。**文档里写的命令已实测，不是照抄惯例**
 - `--camera` / `--video` 两条路径仍未在真机 / 真实录像上跑过
 - `test_no_reports_before_the_start_command` **没跑循环**（只断言构造函数里计数为 0），名字比它做的事大——已记下，尚未改
 
