@@ -29,15 +29,22 @@ import yaml
 class ChannelMap:
     """Which RC channel carries which control axis.
 
-    The defaults reproduce the reference platform's ArduSub layout
-    (3=heave, 4=yaw, 5=forward, 9=lights).  A tail-fin fish with only two
-    effective axes sets ``heave = None``; nothing else changes.
+    Defaults reflect the competition vehicle as the team described it
+    (2026-10-02): a **single-joint tail fin**, which produces thrust and yaw
+    from one actuator, on a hull that **floats at the water surface**, so there
+    is no depth axis to command.  ``heave`` is therefore unmapped by default.
 
-    UNVERIFIED: the competition vehicle's channel count and assignment are not
-    confirmed.  See `.dsh/agents/reference-pipeline.md` section 9.
+    The channel *numbers* still reproduce the reference platform's ArduSub
+    layout (4=yaw, 5=forward, 9=lights) and remain UNVERIFIED against the
+    competition platform: what is known is which axes exist, not which channel
+    carries them.  See `.dsh/agents/hardware.md` and
+    `.dsh/agents/reference-pipeline.md` section 9.
+
+    Any axis set to ``None`` is simply not transmitted.  Setting ``heave = 3``
+    reproduces a three-axis ROV layout; nothing else changes.
     """
 
-    heave: int | None = 3
+    heave: int | None = None
     yaw: int | None = 4
     forward: int | None = 5
     lights: int | None = 9
