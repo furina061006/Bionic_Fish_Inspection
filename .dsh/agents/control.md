@@ -1,4 +1,8 @@
 # 控制算法（巡线、转弯、起终点、丢线恢复）
+> [!WARNING]
+> **本文件描述的是 v0.1 的模块划分（`config` / `control` / `fsm` / `platform` / `reporting` / `runtime`），那些模块已在 2026-10-02 的线性重写中删除。**
+> 里面的**设计理由**（耦合约束、踩过的坑）仍然成立，但模块名与调用方式已变。
+> 现行结构看 [`runtime-flow.md`](runtime-flow.md)，代码看 [`src/bionic_fish/main.py`](../../src/bionic_fish/main.py)。
 
 > 入口索引与工作约定在仓库根目录 [`AGENTS.md`](../../AGENTS.md)；本文件是 `.dsh/agents/` 知识库的一部分。
 > 输入从哪来见 [`vision.md`](vision.md)；上游状态与接口见 [`architecture.md`](architecture.md)。

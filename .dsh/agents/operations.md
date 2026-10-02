@@ -78,17 +78,18 @@
 **先说清楚：这不是固件。** 没有烧录、没有 bootloader —— 它是一个 Python 包，启动就是启动一个进程。
 
 - 【事实】命令行入口是 `python -m bionic_fish`（[`__main__.py`](../../src/bionic_fish/__main__.py)）；真机上先装一次 `pip install -e ".[hardware,rpi]"`，之后就不需要 `PYTHONPATH=src`
-- 【事实】三种模式的区别**只在「接不接真硬件」**：
+- 【事实】v2 之后只剩两条路，**区别只在两个口上接什么**：
 
-| 模式 | 命令 | 链路 | 声光 | 真的开相机 | 鱼会不会动 |
-| --- | --- | --- | --- | --- | --- |
-| 合成 | `python -m bionic_fish` | `SimLink` | 记录 | 否（合成帧） | 否 |
-| **台架** | `python -m bionic_fish --camera 0` | `SimLink` | 记录 | **是** | **否** |
-| **实物** | `python -m bionic_fish --vehicle` | `MavlinkLink` | **真 GPIO** | **是** | **是** |
+| 模式 | 命令 | 帧源 | 出口 | 会不会动 |
+| --- | --- | --- | --- | --- |
+| 仿真 | `python -m sim.run_sim` | `FakeCamera`（渲染） | `SimLink`（记录） | 否 |
+| 实物 | `python -m bionic_fish` | `Camera` | `MavlinkLink` + 真 GPIO | **是** |
 
-- 【设计】`--camera` 是**台架模式**：整条链路照常跑、日志照常记，**但一条指令都不发**。这是有意的 —— 它让你在没有水池的时候验证感知，而不必担心鱼跑掉
-- 【事实】`--vehicle` 的顺序是：连 MAVLink（等心跳）→ 解锁（校验 `COMMAND_ACK`）→ 跑 → **无论怎么退出都上锁**（`finally`）
-- 【设计】解锁失败**直接报错退出**，不降级继续。未解锁的 ArduSub 仍然接受 `RC_CHANNELS_OVERRIDE`、仍然报航向，所以程序会跑完、日志会很漂亮、鱼一动不动 —— **安静地失败是最贵的失败方式**
+- 【设计】没有「只开相机不发指令」的台架模式了 —— 想不带硬件验证感知，就写一条针对
+  `find_white_pipe` 的测试，或者用 `sim/` 换一份参数。这比多一个运行模式更省事
+- 【事实】`--config x.yaml` 两条路都吃：平的 YAML，键名就是 `params.py` 的字段名
+- 【事实】`python -m bionic_fish` 的顺序：连 MAVLink（等心跳）→ 开相机 → 解锁（校验
+  `COMMAND_ACK`）→ 跑 → **无论怎么退出都上锁**（`finally`）
 - 【设计】`disarm` 放在 `finally` 里是**安全要求**，不是整洁：终端状态、异常、Ctrl-C 任何一条退出路径如果不解锁，飞控会保持最后一根杆位，鱼会在没人看的时候继续游
 
 **开机自启**：[`deploy/bionic-fish.service`](../../deploy/bionic-fish.service)
@@ -111,7 +112,7 @@ journalctl -u bionic-fish -f
 >
 > 在定下来之前：**手动启动服务**。
 
-- 【待验证】`--vehicle` 这条路**完全没在真机上跑过**。已验证的只有三件，都是用假设备测的：解锁失败的报错、`finally` 里的解锁（含 Ctrl-C 路径）、连接失败的文案。真实串口、真实飞控、真实 GPIO 全是空白
+- 【待验证】实机这条路**完全没在真机上跑过**。测试里能守住的只有：四条硬终止真的会终止、丢线不复位舵量、解锁失败要报错。真实串口、飞控、GPIO、相机四段全是空白
 - 【待验证】`artefact_dir`（原始帧落盘）**尚未实现**：架构 8.1 把它列为硬要求，但目前没有任何代码读这个配置项。它是出事时唯一的证据，见 [backlog](../../backlog.md)
 
 ## 标定

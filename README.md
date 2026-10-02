@@ -18,7 +18,7 @@
     - [`.dsh/logs/` 怎么用](#dshlogs-怎么用)
     - [维护节奏](#维护节奏)
   - [三、系统架构：一句话 + 一张图](#三系统架构一句话--一张图)
-  - [四、`src/` 各模块](#四src-各模块)
+  - [四、代码结构](#四代码结构)
     - [这份实现是**参考实现**](#这份实现是参考实现)
   - [五、怎么跑](#五怎么跑)
     - [没有硬件时会发生什么](#没有硬件时会发生什么)
@@ -54,7 +54,8 @@
 | `.dsh/logs/` | 开发过程记录（当时快照，**不改写正文**） |
 | `.dsh/skills/` | 项目内技能入口（软链接到用户级源文件，本身不入库） |
 | `.dsh/tools/` | 校验脚本 |
-| `src/` | 实现代码 |
+| `src/` | 实现代码（**只有实机代码**） |
+| `sim/` | 仿真壳：合成场地、占位动力学、假相机/假飞控。**不入包** |
 | `tests/` | 测试 |
 | `deploy/` | 部署：systemd 单元。启动方式与时机见 [`.dsh/agents/operations.md`](.dsh/agents/operations.md) |
 | `docs/` | 权威输入：赛题 PDF 与提取出的场地图 |
@@ -141,29 +142,38 @@ python3 .dsh/tools/check-links.py .
 
 ---
 
-## 四、`src/` 各模块
+## 四、代码结构
 
-包名 `bionic_fish`，纯 Python，依赖 `numpy` + `opencv-python`（`pymavlink` 只在真机路径用）。
+**先读 `src/bionic_fish/main.py`** —— 它是一个循环，从上往下读就是鱼在池子里做的事。
+其余模块是被它调用的函数库，只在想知道「这一步怎么算」时才打开。
 
-| 模块 | 职责 | 关键点 |
+包名 `bionic_fish`，纯 Python，依赖 `numpy` + `opencv-python`（`pymavlink` + `pyserial` 只在真机路径用）。
+
+| 文件 | 职责 | 关键点 |
 | --- | --- | --- |
-| `config.py` | **全部可调参数的唯一住所**：通道映射、相机与像素标定、灯带分割、标记检测、上报阈值、控制增益、安全阈值、状态机阈值、声光参数 | `Config.validate()` 在加载期拒绝自相矛盾的配置；`load_config()` 叠加 YAML。**算法模块里不许有阈值** |
-| `arena.py` | 合成场地与正下视相机 | 按赛题 PDF 几何以 1 mm/px 渲染池底，再用**严格仿射**映射生成相机视图；`DegradeSpec` 加水下衰减/辉光/光照梯度/高光/噪声。标记的像素直径**由标定推出**而非硬编码——这是没有相机时唯一可信的数据源 |
-| `vision.py` | 感知：`StripTracker` 灯带中心线、`MarkerDetector` 暗斑候选、`CrossLineDetector` 起终点黑带，以及三个观测结构 `LineObs` / `MarkerCand` / `CrossObs` | 灯带用 top-hat（亮**局部**结构）分割，抗色偏；中心线用逐行游程 + 鲁棒直线拟合；`valid=false` 与「偏差=0」是两件事；黑带判据有三条物理约束（几像素厚 + 在画面内部 + 灯带可见） |
-| `reporting.py` | 决策：`Reporter` 轨迹关联 + 三道闸 + `p > 阈值` 判决 → `ReportEvent`；`candidate_score` 是最弱一环打分 | 判决阈值来自评分：`+5 / −3 ⇒ p > 3/8`。去重按**候选轨迹身份**（13 个标记间距小于鱼体长度，距离窗口会合并相邻真点）。`GateStats` 记录每条拒绝路径，否则「没检测到」和「被闸掉」分不开 |
-| `fsm.py` | 状态：`StateMachine` + `SafetyMonitor`（四条硬终止）+ 弯角推进 | 四条终止都是赛题 PDF 的 FACT。`SafetyMonitor` **刻意独立于状态转移**——状态机出错时保护仍要生效。弯角**独立于状态推进**，否则丢线会关掉唯一能终止转向的机制 |
-| `control.py` | `Pid`（实测 dt、显式抗饱和）+ `LineController` 串级纯追踪 → `Actuator` | 内环误差是 **`e_theta + e_theta_d`**，不是看起来更自然的差——`e_theta` 是灯带**相对车体**的量，写成差会让航向环变成正反馈（见日志） |
-| `platform.py` | 硬件出口：`Link` 协议（`SimLink` 记录型 / `MavlinkLink` 真机）、`Annunciator` 声光与 `Speaker` 播报 | **唯一**硬件出口，所以整条链路能在没有硬件的机器上跑完。只开一条 MAVLink 连接（MAVLink 流只有一个读者）；解锁校验 `COMMAND_ACK`；声光非阻塞 |
-| `plant.py` | 占位动力学，让控制环能闭环 | **全部参数是占位值**（文件头已写明）。增益与提交转角长度都建立在它之上——**对着它调参等于拟合虚构** |
-| `runtime.py` | 组装与主循环：`Runner`（合成闭环 / 录像回放 / 相机）、`RunLog`、`evaluate_scoring` | 一帧一循环、从不 sleep（参考项目在控制环里 `cv2.imshow` + 阻塞 `sleep`）。每条日志能回答「这次为什么报了 / 没报」 |
-| `__main__.py` | 命令行入口：`python -m bionic_fish` 跑一场并打印摘要，`--trace` 打逐帧表 | **运行顺序在这里变成可观察的数据**。它是调试前端，不是比赛程序 |
-| `__init__.py` | 包说明与模块地图 | — |
+| `main.py` | **主循环。鱼的行为全在这里** | 一帧 7 步，第一条就是四条硬终止，任何状态逻辑绕不过去。它**不知道自己在哪跑** |
+| `params.py` | 全部可调参数，默认值照参考项目；平的 YAML 覆写 | 一个 `Params` dataclass，没有 11 层抽象。`check()` 在加载期拒绝自相矛盾的配置 |
+| `vision.py` | 看：`find_white_pipe` / `find_black_dot` / `is_tape` | top-hat 分割抗光照梯度；游程宽度窗口挡住管顶镜面高光带；黑带用**绝对暗度**（黑帽在亮结构边缘也会响应） |
+| `drive.py` | `Pid`（实测 dt、显式抗饱和）+ 期望航向 + 限斜率 | 内环误差是 **`e_theta + 修正量`**，不是差 —— 写成差会让航向环变正反馈，而直道测试看不出来 |
+| `link.py` | 出：`MavlinkLink` + `Annunciator`（灯 / 蜂鸣 / 播报） | 只开一条 MAVLink 连接；解锁校验 `COMMAND_ACK`；声光非阻塞 |
+| `camera.py` | 进：`Camera` | 两个口之一。时间戳用 `time.monotonic` |
+| `__main__.py` | 实机入口：连接 → 解锁 → `main()` → **上锁** | `disarm` 放 `finally` 是安全要求；解锁被拒直接退出，不降级 |
+
+仿真壳在仓库根的 `sim/`，**不入包**：`arena.py`（合成场地）、`plant.py`（占位动力学）、
+`harness.py`（假相机 + 假飞控）、`run_sim.py`（入口）。
 
 ### 这份实现是**参考实现**
 
-`src/` 的用途是**把架构约束和踩过的坑固化下来**，并让整条链路在没有硬件时也能验证。它**未必适配真机，后面很可能大改**。重写时值得保留的是 [architecture](.dsh/agents/architecture.md) 里的**模块边界**与**十条耦合约束**，以及日志里那些坑，不是具体代码。
+`plant.py` 的全部动力学是占位值，`params.py` 的默认值多数照参考项目 —— **未必适配真机**。
+对着 `plant.py` 调参等于拟合虚构。值得保留的是[四条硬终止](.dsh/agents/runtime-flow.md#五四条硬终止)、
+「丢线不当成已对准」、以及 `drive.py` 的符号约定。
 
-已明确靠不住的地方：`plant.py` 全部动力学、`ChannelMap` 默认值、全部像素阈值（由默认相机推出）、灯带分割方法的默认选择、`discriminator="none"`、弯向假设、合成场地的模型局限。逐条见 [`.dsh/logs/2026-09-25-day-summary.md`](.dsh/logs/2026-09-25-day-summary.md) 第四节。
+### 已经放弃的能力
+
+v0.1 有一套「最弱一环打分 + `p > 3/8` 判决」的上报置信度。现在没有，**候选无条件上报**。
+实测代价：干扰点会吃掉 8 次上报预算，把真漏油点挤掉（居中起始 8 次上报里 5 真 3 误 3 漏）。
+把 `dot_val_max` 从 255 压到 90 可回到 8/8、零误报，但那个 90 是渲染器的值，
+真机必须用真实物料重量。见 [runtime-flow](.dsh/agents/runtime-flow.md) 第六节。
 
 ---
 
@@ -174,49 +184,47 @@ python3 .dsh/tools/check-links.py .
 ```sh
 conda activate aquacore
 
-# 可编辑安装一次。装完就不需要 PYTHONPATH=src 了
+# 可编辑安装一次
 pip install -e .
 
-# 跑一场合成闭环并打印摘要 —— 没有相机、没有鱼也能跑完
-python -m bionic_fish
+# 仿真跑一趟 —— 没有相机、没有鱼也能跑完
+python -m sim.run_sim
 
-# 加上逐帧表：把「每帧按什么顺序跑」变成可观察的数据
-python -m bionic_fish --trace --trace-limit 40
+# 换起始条件
+python -m sim.run_sim --lateral-mm -30
 
-# 换一个起始条件（默认 -30mm 是已知能跑完全程的那条）
-python -m bionic_fish --lateral-mm 0
+# 用一份参数覆写跑（平的 YAML，键名就是 params.py 的字段名）
+python -m sim.run_sim --config tank.yaml
 
-# 跑测试（无需硬件；合成场地就是数据源）
+# 实机（需要真相机与真飞控）
+python -m bionic_fish --device /dev/ttyACM0
+
+# 跑测试（无需硬件）
 python -m unittest discover -s tests
-
-# 只跑感知层
-python -m unittest discover -s tests -p "test_perception.py"
 
 # 校验文档链接与锚点
 python3 .dsh/tools/check-links.py .
 ```
 
-不安装也能跑：把每条命令的 `python` 换成 `PYTHONPATH=src python` 即可（这正是没有打包元数据之前的唯一办法）。
 
-**注意**：测试用标准库 `unittest`，**不是 pytest**——`aquacore` 环境里没有 pytest。请用上面两条命令之一，不要把 `tests/` 当包调用（它不是包）。
+**注意**：测试用标准库 `unittest`，**不是 pytest**。不要用 `python -m unittest tests/xxx.py` 那种写法——它会把 `tests/` 当包导入，而它不是包。
 
-当前状态：**90 个测试通过，其中 1 个是 `@unittest.expectedFailure`**（记录「弯角并非所有起始条件都能跑通」）。
+当前状态：**18 个测试通过**。仿真下 0 与 ±30mm 三种起始条件都能跑完全程、8/8 上报。
 
 ### 没有硬件时会发生什么
 
-开发机上 `/dev/video*` 不存在、`RPi.GPIO` 不存在、`onnxruntime` 未安装。这些路径都会**回退到记录型实现**，链路照样跑完：
+仿真不是「降级模式」，而是**套在核心外面的壳**：`sim/harness.py` 给 `main()` 塞一个渲染器
+和一个记录器，核心代码一行不改。所以开发机上的行为与实机的差异**只在这两个口上**。
 
-- `SimLink` 代替 `MavlinkLink`（记录指令而不发送）
-- `RecordingGpio` 代替 `_RpiGpio`（记录引脚变化）
-- `Arena` 代替相机（合成帧）
-
-**回退逻辑本身是对的，但真机行为未验证**——别把「在开发机上跑通」当成「在鱼上能跑」。
+反过来也要小心：`sim/arena.py` 把管道渲染成**平面折线**，它不产生管顶高光带，也不产生两侧
+阴影 —— 而那两条是 [`hardware.md`](.dsh/agents/hardware.md) 列的头号失败模式。
+**在仿真里跑通，不代表真实照片上不会锁到高光带上。**
 
 ### 三层验证阶梯
 
-1. **单元测试**（手造观测 → 决策逻辑），不依赖感知与动力学
-2. **合成闭环**（`Runner.run_synthetic`），整链路口径，但受占位动力学所限
-3. **录像回放**（`Runner.run_frames`），接真实数据；相机是 `Runner.run_camera`——两者都**未在真机上验证**
+1. **单元测试**（`tests/test_logic.py`）—— 四条硬终止、上报去重、打舵符号。不依赖硬件也不依赖动力学
+2. **仿真闭环**（`python -m sim.run_sim`）—— 整链路口径，但受占位动力学所限
+3. **实机**（`python -m bionic_fish`）—— **未验证**：真实串口、飞控、GPIO、相机四段全是空白
 
 ---
 
@@ -229,7 +237,7 @@ python3 .dsh/tools/check-links.py .
    ```
 
    工作区与另一个终端共享，HEAD 会被切走。「打印一行再继续」不算检查——2026-09-26 就这么把一次提交落到过 `main` 上，见 [`.dsh/logs/2026-09-26-branch-gate.md`](.dsh/logs/2026-09-26-branch-gate.md)。
-2. **阈值不许硬编码**：所有部署相关数字进 `config.py`，物理量阈值必须能追溯到标定（[不变量 7](.dsh/agents/invariants.md)）。
+2. **阈值一律进 `params.py`**：算法模块里不许有魔数，物理量阈值必须能追溯到标定（[不变量 7](.dsh/agents/invariants.md)）。
 3. **`valid=false` 不等于 0**：绝不用 0 冒充「没看到」（[不变量 3](.dsh/agents/invariants.md)）。
 4. **改完回写文档**：先 `.dsh/agents/` → 再 `.dsh/logs/` → 再日志索引。
 5. **做完的 backlog 条目直接删掉**，不留痕（历史在 `.dsh/logs/`）。

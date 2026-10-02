@@ -19,3 +19,4 @@
 | 2026-10-02 | [package-and-entry-point](2026-10-02-package-and-entry-point.md) | 查证参考项目确有 4 个业务子包（我原先判断错了）；决定我方保持扁平包并留下拆分触发器；补 `pyproject.toml` + 命令行入口 + `--trace`；新增运行顺序文档 |
 | 2026-10-02 | [hardware-facts-and-code-notes](2026-10-02-hardware-facts-and-code-notes.md) | 队内五条实物事实逐条核对（U 形与「⊐」一致、白色圆柱管道 vs 原文「LED 灯带」冲突）；`heave` 不再下发；新增 `darkness` 判别器（含 `val_band` 默认值的一次中途改正）；11 个模块加中文定位块 |
 | 2026-10-02 | [vehicle-startup](2026-10-02-vehicle-startup.md) | 查证「丢到树莓派怎么启动」：列出 7 处空缺（**`--camera` 实际不碰硬件**最危险）；补 `run_armed`（解锁 + 必上锁）、`--vehicle`、`pyserial`、systemd 单元；修 `connect()` 没兑现的「返回失败而非抛异常」契约；**启动时机作为规则问题留待决定** |
+| 2026-10-02 | [linear-rewrite](2026-10-02-linear-rewrite.md) | 线性重写：`src/` 4517 行 11 模块 → 1280 行 7 文件；主循环 `main.py` 从上往下读；仿真搬到 `sim/` 不入包；抓出上报合并、误判未启动、脱线计时三个 bug |
