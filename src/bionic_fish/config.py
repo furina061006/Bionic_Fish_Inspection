@@ -202,10 +202,16 @@ class Calibration:
 
 @dataclass
 class StripParams:
-    """LED-strip segmentation and centre-line extraction.
+    """Pipe segmentation and centre-line extraction.
 
-    Three segmentation methods are implemented because the strip's actual
-    appearance is UNVERIFIED:
+    The competition calls the route an "LED strip" (p3); the team confirmed the
+    physical object is a **white cylindrical pipe**, and the ``strip`` naming
+    used throughout this package is historical for the same thing.
+
+    Three segmentation methods are implemented because the pipe's actual
+    appearance is UNVERIFIED - and note that a *passive, reflective* white pipe
+    images differently from the emissive strip the original wording suggests:
+    the lighting matters, and there is a bright specular streak along the top.
 
     ``tophat``          bright *local* structure (default).  Water attenuation
                         tints everything toward one hue and the illumination

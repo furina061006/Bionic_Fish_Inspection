@@ -2,7 +2,7 @@
 
 This module answers four questions and nothing else:
 
-1. Where is the LED strip, and which way does it run?  -> :class:`LineObs`
+1. Where is the white pipe, and which way does it run? -> :class:`LineObs`
 2. Is there a dark disc on or beside it?               -> :class:`MarkerCand`
 3. Is the dark band ahead the start/finish tape?       -> :class:`CrossObs`
 4. How big is a marker in pixels?                      -> carried on the config
@@ -50,7 +50,11 @@ from .config import Calibration, MarkerParams, StripParams
 
 @dataclass
 class LineObs:
-    """Where the LED strip is, relative to the vehicle.
+    """Where the pipe is, relative to the vehicle.
+
+    The competition describes this as an "LED strip" (p3) and the team confirmed
+    the physical object is a **white cylindrical pipe**; the ``strip`` naming used
+    throughout this package is historical and refers to the same thing.
 
     Sign convention for every angular and lateral quantity: **positive means the
     strip lies to the vehicle's right**.  A controller can therefore steer with
@@ -146,7 +150,13 @@ class CrossObs:
 
 
 class StripTracker:
-    """Extract the LED strip centre line from a downward camera frame."""
+    """Extract the white pipe's centre line from a downward camera frame.
+
+    Passive and reflective, unlike an emissive LED strip: expect a bright
+    specular streak along the top that is *brighter than the pipe* and much
+    narrower.  The run-width window is what rejects it; see
+    ``Calibration.strip_width_mm``.
+    """
 
     def __init__(self, params: StripParams, calibration: Calibration) -> None:
         self.params = params

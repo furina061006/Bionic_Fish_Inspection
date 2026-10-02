@@ -59,8 +59,9 @@ class ArenaSpec:
     pool_length_mm: float = POOL_LENGTH_MM
     pool_width_mm: float = POOL_WIDTH_MM
     strip_inset_mm: float = STRIP_INSET_MM
-    #: Width of the LED strip itself.  UNVERIFIED; the real strip is a physical
-    #: object whose width must be measured on site.
+    #: Width of the white pipe itself, i.e. its **diameter** - seen from directly
+    #: above, a cylinder's silhouette is exactly that wide.  UNVERIFIED; the real
+    #: pipe must be measured on site.
     strip_width_mm: float = 24.0
     marker_diameter_mm: float = MARKER_DIAMETER_MM
     tape_width_mm: float = 18.0
@@ -299,7 +300,12 @@ class Arena:
 
         px = self.floor_px_per_mm
 
-        # LED strip: a polyline of constant physical width.
+        # The white pipe: a flat polyline of constant physical width.
+        #
+        # It is rendered flat, so this arena does NOT reproduce the pipe's
+        # specular top streak or its side shadows.  Those are the first two
+        # failure modes listed in `.dsh/agents/hardware.md`, and a tracker that
+        # survives here can still lock onto the streak on real footage.
         pts = np.array(
             [[int(round(x * px)), int(round(y * px))] for x, y in spec.path_points()],
             np.int32,

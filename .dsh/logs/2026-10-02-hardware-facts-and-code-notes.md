@@ -139,3 +139,24 @@ ModuleNotFoundError: No module named 'tests.test_perception'
 ---
 
 相关：[hardware](../agents/hardware.md)（车体事实与圆柱管道成像）· [competition](../agents/competition.md)（实物补充一节）· [architecture](../agents/architecture.md)（耦合 12）· [vision](../agents/vision.md)（暗度判别器）· [writing](../agents/writing.md)（注释语言约定）
+
+---
+
+## 追加（同日）：白色圆柱管道由「待确认」改为「已确认」
+
+上面第一节把「路线实物是白色圆柱形管道」记成了**与原文措辞冲突的待确认项**（原文 p3 写「池底 LED 灯带」）。审阅者随后明确：**已确认是白色圆柱管道**。
+
+所以这一项从「冲突 / 待问组委会」改判为**已确认事实，以实物为准**。正文不改（本节是对它的追加说明），改的是各处现行文档：
+
+| 位置 | 改动 |
+| --- | --- |
+| [competition](../agents/competition.md) 实物补充 | 该行由 ⚠️ 改为 ✅ 已确认；删掉「必须先问清措辞冲突」那条待验证；补一条「灯带 / strip 是本仓库沿用的历史命名，指的就是这根白管」 |
+| [vision](../agents/vision.md) | **改掉一条已错的物理先验**：原文写「LED 灯带**自发光**」——白管是**被动反光**，这条必须反过来；该节标题由「不是 LED 灯带」改为「已确认」 |
+| [hardware](../agents/hardware.md) | 四条「圆柱成像后果」由「全是推理」升为「**由几何必然成立**」，量级仍待真实照片 |
+| [reference-pipeline](../agents/reference-pipeline.md) 第 9 节问题表 | 问题 1/2/3/5/6 标记为已定 / 部分已定；**问题 5（灯带什么颜色）直接结案**——实物不是灯带 |
+| [backlog](../../backlog.md) | 删掉「LED 灯带是什么颜色？」（已完成，按约定做完即删）；「路线实物的两个未知」收窄为「管道直径」；新增「白管分割方法要重选」 |
+| `src/bionic_fish/` 注释 | `vision.py` / `arena.py` / `config.py` 里 6 处「LED strip」注释改为 white pipe，并把「被动反光 + 管顶高光带」写进 `StripTracker` 与 `Arena.render_floor` 的注释 |
+
+**顺带记一条模型的自我提醒**：`arena.py` 把管道渲染成**平面折线**，所以它**不产生**管顶高光带，也不产生两侧阴影——那两条正是 [hardware](../agents/hardware.md) 列的头号失败模式。**在这里跑通不代表真实照片上不会锁到高光带上。** 这句话已经写进 `Arena.render_floor` 的注释，免得以后有人拿合成结果当证据。
+
+一条**保留**的差异记录：原文的「LED 灯带」措辞**留在 `competition.md` 里不动**（表格那一行仍引用原文），并在旁边加了指回「实物补充」的指针。理由：官方材料的说法与我们手上的东西不一致，这件事本身值得留着——它不是待办，是**事实的一部分**。
