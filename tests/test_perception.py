@@ -39,7 +39,7 @@ from bionic_fish.arena import (
     ground_truth_offset_px,
 )
 from bionic_fish.config import Config, StripParams, load_config
-from bionic_fish.vision import CrossLineDetector, MarkerDetector, StripTracker
+from bionic_fish.vision import CrossLineDetector, MarkerCand, MarkerDetector, StripTracker
 
 
 class ArenaGeometryTest(unittest.TestCase):
@@ -251,6 +251,80 @@ class MarkerDetectorTest(unittest.TestCase):
         cands = detector.observe(frame, line)
         self.assertTrue(cands, "detection must still produce candidates")
         self.assertFalse(any(detector.accepts(c) for c in cands))
+
+    def _candidate_of(self, kind: str, detector: MarkerDetector) -> MarkerCand:
+        """One candidate for the first marker of ``kind`` on the top straight.
+
+        The top straight is used because only there is a heading of zero the
+        direction of travel; picking a marker by ``kind`` alone would sometimes
+        land on the bottom straight, where the vehicle travels the other way.
+        """
+        marker = next(
+            (m for m in self.arena.markers if m[0] == kind and abs(m[2] - 500.0) < 1.0),
+            None,
+        )
+        if marker is None:
+            self.skipTest(f"no {kind} marker on the top straight")
+        _, mx, my = marker
+        frame = self.arena.view(mx - 100.0, my, 0.0)
+        line = self.tracker.observe(frame)
+        cands = detector.observe(frame, line)
+        self.assertTrue(cands, f"detection must find the {kind} marker")
+        return max(cands, key=lambda c: c.area_px)
+
+    def test_darkness_discriminator_reads_the_expected_values(self) -> None:
+        """The mechanism of the ``darkness`` rule, measured on a single frame.
+
+        Detection uses a black-hat response, which is a *relative* measure: over
+        a white pipe both a pure-black leak and a merely grey disc return a large
+        response, so no relative threshold separates them.  This rule reads the
+        disc interior in absolute terms instead.
+
+        What this test deliberately does **not** establish is that the two are
+        separable over a whole run.  In this renderer they are not: a full-run
+        sweep needs an upper bound of 120 to keep all 8 leaks, while the
+        distractor's own range starts at 122.  The measured table lives in
+        `.dsh/agents/vision.md`, and the rule stays uncalibrated until a tank
+        measurement says otherwise - so the band here is derived from the two
+        measurements rather than written down as if it were a real threshold.
+        """
+        probe = MarkerDetector(
+            dataclasses.replace(self.cfg.marker, discriminator="darkness"),
+            self.cfg.calibration,
+        )
+        leak = self._candidate_of("leak", probe)
+        distractor = self._candidate_of("distractor", probe)
+
+        self.assertLess(
+            leak.val,
+            distractor.val - 40.0,
+            "a pure-black disc must read far darker than a merely grey one",
+        )
+
+        midpoint = 0.5 * (leak.val + distractor.val)
+        detector = MarkerDetector(
+            dataclasses.replace(
+                self.cfg.marker, discriminator="darkness", val_band=(0.0, midpoint)
+            ),
+            self.cfg.calibration,
+        )
+        self.assertTrue(detector.accepts(leak), "the leak must fall inside the band")
+        self.assertFalse(detector.accepts(distractor), "the distractor must fall outside")
+
+    def test_darkness_discriminator_default_band_accepts_everything(self) -> None:
+        """Every band defaults to accept-all: the rule is a slot for a number.
+
+        Selecting a discriminator must not silently reject candidates before the
+        in-tank calibration has happened, otherwise the default configuration
+        would report nothing and the failure would look like a perception bug.
+        """
+        detector = MarkerDetector(
+            dataclasses.replace(self.cfg.marker, discriminator="darkness"),
+            self.cfg.calibration,
+        )
+        for kind in ("leak", "distractor"):
+            cand = self._candidate_of(kind, detector)
+            self.assertTrue(detector.accepts(cand), f"{kind} rejected by the default band")
 
 
 class CrossLineDetectorTest(unittest.TestCase):

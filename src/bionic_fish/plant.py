@@ -17,6 +17,15 @@ Two features are deliberate, because they are what make this vehicle hard:
 * **steering requires way**, so the yaw rate is scaled by forward speed.  A
   stationary fish cannot turn, which is why the recovery logic must keep some
   forward command alive.
+
+在链路里的位置
+    每帧第 12 步（共 13 步，见 runtime.Runner._iterate），**只在合成模式存在**
+    上游：control.Actuator
+    下游：新位姿 → arena.view() 生成下一帧（闭环就是这样合上的）
+    参数全部是占位值。**对着它调参等于拟合虚构**（.dsh/agents/control.md）
+    已知错：它把偏航与前进当成两个独立轴（只把偏航力矩按速度缩放），而实车是
+            **单关节尾鳍**——两者出自同一个执行器，大舵量会直接吃掉推力。
+            换真机前必须重新建模，见 .dsh/agents/architecture.md 耦合 12
 """
 
 from __future__ import annotations

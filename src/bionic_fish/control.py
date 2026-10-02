@@ -20,6 +20,15 @@ This is the refactor of the reference project's control layer
   says which channel carries which axis, so the same controller drives the
   reference's three-channel ROV layout or a two-channel tail-fin fish with no
   code change.
+
+在链路里的位置
+    每帧第 9 步（共 13 步，见 runtime.Runner._iterate），由 runtime 调用
+    上游：vision.LineObs + fsm.Decision（目标前进量 / 弯角标志 / 转向覆盖）
+    下游：Actuator → platform.Link.send（第 10 步，唯一的执行器写点）
+    跨帧状态：有。两个 Pid 的积分与微分历史、_forward_us、steer_offset_us、
+              _last_mode_corner。切换增益组或丢线时会 hold() / reset()，
+              目的是**不在不连续点两侧做微分**
+    概念：runtime-flow.md 第 6.4 节（三条分支）、.dsh/agents/control.md
 """
 
 from __future__ import annotations

@@ -21,6 +21,14 @@ prints what happened and exits.  The competition entry will need the same
 real but invisible: no single module shows it, because every stage is called once
 per frame by the loop in :meth:`~bionic_fish.runtime.Runner._iterate`.  The trace
 prints that loop as data, one row per frame.
+
+在链路里的位置
+    它是**用户入口**，不是链路里的一环：唯一职责是把 Runner 跑起来并把 RunLog
+    打印成人能读的东西。它不含任何算法、不做任何决策
+    三种帧源：合成场地（默认）/ 录像（--video）/ 相机（--camera）
+    读代码建议：想知道「怎么跑」，读本文件；想知道「跑起来之后发生什么」，
+              读 runtime._iterate。两者不要混着读
+    概念：.dsh/agents/runtime-flow.md 第 2 节（三个入口）、第 9 节（--trace 用法）
 """
 
 from __future__ import annotations

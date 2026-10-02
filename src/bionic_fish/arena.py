@@ -11,6 +11,15 @@ makes threshold tests meaningful.
 
 Every arena dimension is a FACT from the competition document (p3) unless marked
 otherwise.  Model limitations are listed on :class:`Arena`.
+
+在链路里的位置
+    **不参与每帧循环，但它是所有帧的来源**（开发机上没有相机）
+    被谁调用：Runner.run_synthetic 的帧生成器；测试也直接调 view()
+    产物：(timestamp, frame) —— 与真机相机同形，所以下游一行都不用改
+    跨帧状态：无（render_floor 的缓存只是性能，不影响结果）
+    读代码建议：想知道「某个阈值为什么是这个数」，先判断这里的图像比例可不可信；
+              本模块文档末列了模型局限（水面、光照、标记外观都是猜的）
+    概念：runtime-flow.md 第 2 节；.dsh/agents/operations.md（标定）
 """
 
 from __future__ import annotations

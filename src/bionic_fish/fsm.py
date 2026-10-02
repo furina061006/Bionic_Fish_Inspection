@@ -21,6 +21,16 @@ This module therefore owns two things that must not be spread elsewhere: the
 state transitions, and the counters that can end the run.  Every
 :class:`Decision` carries those counters so an operator can see the remaining
 margins without reading a log.
+
+在链路里的位置
+    每帧第 5 步（共 13 步，见 runtime.Runner._iterate），由 runtime 调用
+    上游：vision.LineObs / vision.CrossObs、上一帧**实际发出**的前进量、当前航向或 None
+    下游：Decision → control.LineController.step
+          它只读三个字段：target_forward_us / corner / yaw_override_us
+          其余字段（elapsed_s / off_track_s / wall_hits / note）是给人看的诊断量
+    跨帧状态：有。state、_corner_hits、_bend_active、_turn_start_yaw、
+              _bend_finished_at 等；Runner.reset() 会调 reset()
+    概念：runtime-flow.md 第 6.2 节（判断次序）、第 7 节（状态生命历程）
 """
 
 from __future__ import annotations

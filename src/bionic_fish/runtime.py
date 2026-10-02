@@ -20,6 +20,14 @@ because each stage is called once per frame and knows nothing about the others.
 It is recorded, one row per frame, when the runner is built with ``trace=True``
 (see :class:`FrameTrace`), and printed by the command line front end in
 :mod:`bionic_fish.__main__` (``python -m bionic_fish --trace``).
+
+在链路里的位置
+    本模块**就是顺序本身**：全仓库只有 _iterate 知道各部件按什么次序被调用
+    三个入口都汇到这里：__main__（命令行）/ run_synthetic（合成闭环）/
+    run_frames（录像与相机）
+    读代码建议：先读 _iterate 的 13 步，再读 Runner.__init__ 的组装；
+              不要从各个部件反推顺序，那样永远推不出来
+    概念：.dsh/agents/runtime-flow.md —— 那份文档就是本模块的说明书
 """
 
 from __future__ import annotations

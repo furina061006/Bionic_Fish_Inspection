@@ -9,6 +9,15 @@ Evidence markers used in this file and across the repository:
 ``FACT``        fixed by the competition document or by a measurement
 ``DESIGN``      a decision this repository made
 ``UNVERIFIED``  an assumption that must be measured before the competition
+
+在链路里的位置
+    **不参与每帧循环**：启动时读一次，之后各部件只读不写
+    被谁读：Runner.__init__ 把它的各个子块分发给 8 个部件
+    跨帧状态：无
+    为什么单独一个文件：不变量 7 —— 阈值必须来自标定，算法模块里不许有魔数
+    读代码建议：**最后再读**。它 700 多行全是参数声明，不含任何控制流；
+              想知道「每帧发生什么」，去看 runtime.py 的 _iterate
+    概念：.dsh/agents/operations.md（标定流程与清单）
 """
 
 from __future__ import annotations
@@ -76,8 +85,15 @@ class Calibration:
     to bypass the model.
     """
 
-    #: Height of the lens above the pool floor.  UNVERIFIED - measure it.
+    #: Height of the lens above the **pipe's top surface**, which is where the
+    #: markers lie and what sets their pixel size.  UNVERIFIED - measure it.
     #: Bounded above by the 260 +/- 20 mm water depth (FACT).
+    #:
+    #: The camera is inside the hull, below the surface, so there is no
+    #: refraction term to model: the geometric distance is the distance that
+    #: matters.  If the camera ever moves above the water line this stops being
+    #: true - a surface-viewed floor appears closer than it is by the refractive
+    #: index, and every size threshold derived here would be wrong by ~25%.
     camera_height_m: float = 0.20
     #: Horizontal field of view.  UNVERIFIED; >= 75 deg is required by the
     #: footprint argument in `.dsh/agents/hardware.md`.
@@ -93,10 +109,18 @@ class Calibration:
 
     #: Diameter of both the leak markers and the distractor markers (FACT, p2).
     marker_diameter_mm: float = 30.0
-    #: Physical width of the LED strip.  UNVERIFIED - must be measured on site.
+    #: Physical width of the track.  UNVERIFIED - must be measured on site.
+    #: For the competition's white pipe this is the pipe's **diameter**: seen
+    #: from directly above, a cylinder's silhouette is exactly that wide.
     #: Used as a strong shape prior: with a nadir camera over a flat floor the
     #: strip's pixel width is constant across the frame, which is what separates
     #: it from a specular reflection that happens to be bright and unsaturated.
+    #:
+    #: CAUTION for a glossy cylinder: a wet white pipe carries a bright specular
+    #: streak along its length, and that streak is *brighter than the pipe* while
+    #: being much narrower.  A run-width window centred on the true width rejects
+    #: it; a detector that simply takes "the brightest thing in the row" locks
+    #: onto it instead.  See `.dsh/agents/vision.md`.
     strip_width_mm: float = 24.0
     #: Valid marker area window, as multiples of the nominal area.
     marker_area_lo_ratio: float = 0.35
@@ -269,6 +293,17 @@ class MarkerParams:
     ``hue``         accept blobs whose mean hue falls inside a band
     ``pattern``     accept blobs by interior fill ratio
     ``position``    accept blobs by their offset from the strip centre line
+    ``darkness``    accept blobs whose interior is dark in *absolute* terms
+
+    ``darkness`` is the leading candidate now that the pipe is known to be
+    white and the leak marker pure black.  Detection uses a black-hat response,
+    which is *relative*: over a white pipe a pure-black disc and a mid-grey disc
+    both return a large response, so a relative test cannot separate them - and
+    a fixed threshold large enough to reject grey would also reject a black
+    marker under a dimmer exposure.  Absolute interior value is the one feature
+    that distinguishes "black" from "merely darker than white".  It costs no
+    extra computation: :attr:`~bionic_fish.vision.MarkerCand.val` is already
+    measured for every candidate.
     """
 
     discriminator: str = "none"
@@ -287,6 +322,23 @@ class MarkerParams:
     #: offset band, as a fraction of frame width, for ``discriminator ==
     #: "position"``.  UNVERIFIED.
     offset_band_frac: tuple[float, float] = (0.0, 1.0)
+    #: interior-value band (OpenCV HSV V, 0-255) for ``discriminator ==
+    #: "darkness"``.  UNVERIFIED, and like every other band here it defaults to
+    #: "accept all" - the rule is a slot for a measured number, not an opinion.
+    #:
+    #: Measured on the synthetic arena.  Single frame with the marker centred:
+    #: leak V = 46..60, distractor V = 122..137.  Over a *whole run* the two
+    #: ranges overlap: keeping all 8 leaks needs an upper bound of 120, and
+    #: 42..71 candidates get rejected there, because the distractor's own range
+    #: starts at 122.  **Absolute value does not separate them in this
+    #: renderer.**
+    #:
+    #: That is not evidence about the real pipe - the renderer's illumination
+    #: gradient spreads the leak's value across the frame, whereas a real
+    #: pure-black disc on a white pipe may hold a much tighter range.  It is
+    #: evidence that this must be calibrated in the tank, and that a
+    #: background-normalised darkness measure is worth having beside it.
+    val_band: tuple[float, float] = (0.0, 255.0)
     #: Minimum vertical speed, in px per frame, for a track to count as
     #: approaching rather than noise.  Gate 2.  UNVERIFIED.
     min_approach_px_per_frame: float = 0.4
@@ -376,8 +428,14 @@ class ControlParams:
     #: narrower, as in the reference project, to avoid fighting the turn.
     yaw_corner: GainSet = field(default_factory=lambda: GainSet(120.0, 10.0, 0.0, 45.0))
     #: Heave trim from the visual-servo scale error.
+    #: INERT with the current vehicle: ``ChannelMap.heave`` is ``None``, so no
+    #: depth channel exists and this loop's output reaches nothing.  Kept because
+    #: the interface is still being designed and a three-axis layout only needs
+    #: ``heave = 3``.  ``LineController`` still computes ``heave_us`` every frame;
+    #: that costs one PID step and is harmless, but do not read meaning into it.
     heave_gain: GainSet = field(default_factory=lambda: GainSet(5.0, 0.0, 0.0, 20.0))
     #: Neutral offset for the heave channel; the reference project sat here.
+    #: INERT, as above.
     heave_trim_us: float = -90.0
     #: Target strip width in pixels for the visual-servo heave loop.  It should
     #: be set to the measured strip width on site; the value here corresponds to
@@ -386,6 +444,11 @@ class ControlParams:
     #: Do not confuse this with the reference project's ``ud_pid.calculate(34,
     #: mean)``: there ``mean`` was a 0-150 binary fill ratio, not a pixel width.
     #: Carrying that 34 across as a pixel width would command a permanent descent.
+    #:
+    #: The heave loop is INERT (see ``heave_gain``), but this number still earns
+    #: its place: it is the expected pixel width of the pipe, i.e. the prior the
+    #: strip tracker's run-width window is built from.  For the competition's
+    #: white pipe that width is the **pipe diameter**, not a flat tape width.
     target_strip_width_px: float = 19.2
     #: Committed yaw offset used while negotiating a bend, microseconds.
     #:
@@ -623,7 +686,7 @@ class Config:
 
         if self.strip.method not in ("tophat", "bright_low_sat", "red_minus_blue"):
             raise ValueError(f"unknown strip.method {self.strip.method!r}")
-        if self.marker.discriminator not in ("none", "hue", "pattern", "position"):
+        if self.marker.discriminator not in ("none", "hue", "pattern", "position", "darkness"):
             raise ValueError(f"unknown marker.discriminator {self.marker.discriminator!r}")
         if self.strip.lookahead_frac <= self.strip.roi_top_frac:
             raise ValueError(

@@ -18,6 +18,19 @@ This wraps the parts of the reference project that touched hardware
 ``RPi.GPIO`` is imported lazily.  Every backend here has a software fallback so
 that the full stack runs - and is tested - on a development machine with no
 autopilot and no GPIO.
+
+在链路里的位置
+    每帧第 7、8、10 步（共 13 步，见 runtime.Runner._iterate）
+    第 10 步 link.send(actuator) 是**全仓库唯一的执行器写点**
+    上游：control.Actuator（控制）+ reporting.ReportEvent（声光与播报）
+    下游：MAVLink RC_CHANNELS_OVERRIDE / RPi.GPIO / 语音 sink
+    这是唯一的硬件出口，所以其余部分能在没有硬件的机器上跑完
+    跨帧状态：Annunciator 有（light_off_at / buzzer_off_at / announcements）——
+              灯要能被关掉、播报要能与上报一一对应
+    待定：车体是自研的。若最终由树莓派直接驱动舵机、没有飞控，这里需要加第三个
+          后端；Link 协议就是为这种替换准备的，后端经 Runner 的 link 参数注入，
+          其余代码一行都不用改
+    概念：runtime-flow.md 第 5 节；.dsh/agents/reporting.md（声光与语音的评分）
 """
 
 from __future__ import annotations

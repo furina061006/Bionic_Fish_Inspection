@@ -189,7 +189,7 @@ python -m bionic_fish --lateral-mm 0
 python -m unittest discover -s tests
 
 # 只跑感知层
-python -m unittest tests/test_perception.py
+python -m unittest discover -s tests -p "test_perception.py"
 
 # 校验文档链接与锚点
 python3 .dsh/tools/check-links.py .

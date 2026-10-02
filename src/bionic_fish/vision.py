@@ -20,6 +20,15 @@ Departures from the reference project, all deliberate:
 * ``valid`` is explicit; the reference used a centroid of ``None`` and a bare
   ``else`` branch, which made "no strip" and "strip in the centre" easy to
   confuse.
+
+在链路里的位置
+    每帧第 2~4 步（共 13 步，见 runtime.Runner._iterate），由 runtime 调用
+    上游：相机帧（真机）或 arena 合成帧（开发机）
+    下游：reporting.Reporter 吃 MarkerCand；fsm.StateMachine 吃 LineObs / CrossObs
+    调用次序有硬依赖：StripTracker 必须先跑，另外两个都要它的 LineObs
+    跨帧状态：**无**。三个检测器只持有参数与预计算的形态学核
+              —— 所以它们能逐帧单独测试，也能被并行化
+    概念：.dsh/agents/vision.md（设计）、runtime-flow.md 第 6.1 节（调用次序）
 """
 
 from __future__ import annotations
@@ -473,6 +482,9 @@ def accepts_marker(cand: MarkerCand, params: MarkerParams, calibration: Calibrat
             return False
         frac = abs(cand.lateral_offset_px) / calibration.frame_w
         return lo <= frac <= hi
+    if params.discriminator == "darkness":
+        lo, hi = params.val_band
+        return lo <= cand.val <= hi
     return True  # pragma: no cover - guarded by Config.validate
 
 

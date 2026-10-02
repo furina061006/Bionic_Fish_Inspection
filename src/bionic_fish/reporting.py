@@ -27,6 +27,15 @@ and a false-report loss of -3, reporting has positive expectation only when
 ``p > 3/8``.  Confidence is a weakest-link score over the measurable features,
 which is deliberately conservative: one disqualifying feature is enough to hold
 a candidate back.
+
+在链路里的位置
+    每帧第 6 步（共 13 步，见 runtime.Runner._iterate），由 runtime 调用
+    上游：vision.MarkerCand 列表 + vision.CrossObs + 时间戳
+    下游：ReportEvent → platform.Annunciator（灯 / 蜂鸣 / 播报）与 RunLog
+    跨帧状态：有。tracks（轨迹表）、stats（闸门计数）、_reports_emitted
+              —— 它们是「同一个标记不会报两次」的唯一实现
+    与状态机**完全平行**：Reporter 不读状态，只吃候选
+    概念：runtime-flow.md 第 6.3 节（七道闸 + 十个计数器）、.dsh/agents/reporting.md
 """
 
 from __future__ import annotations
