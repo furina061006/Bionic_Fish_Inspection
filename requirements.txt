@@ -1,0 +1,14 @@
+# Deployment shortcut only.  The authoritative dependency list lives in
+# pyproject.toml under [project.dependencies] - do not restate versions here,
+# because two lists drift and then neither is trusted.
+#
+# Development machine and Raspberry Pi alike:
+-e .
+
+# A real vehicle additionally needs pymavlink and RPi.GPIO, which are declared
+# as extras in pyproject.toml.  Install them with:
+#
+#     pip install -e ".[hardware,rpi]"
+#
+# Neither is required for the synthetic closed loop, the test suite, or
+# `python -m bionic_fish`.

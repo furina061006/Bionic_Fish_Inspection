@@ -44,6 +44,7 @@
 | 查场地尺寸、道具、判罚、评分表的原始规定 | [`.dsh/agents/competition.md`](.dsh/agents/competition.md) |
 | 选型相机 / 灯 / 传感器，或核对尺寸、防水、禁用项 | [`.dsh/agents/hardware.md`](.dsh/agents/hardware.md) |
 | 动模块划分、数据流、状态机、模块间接口 | [`.dsh/agents/architecture.md`](.dsh/agents/architecture.md) |
+| 想知道**代码每帧按什么顺序跑**、该从哪一行开始读 | [`.dsh/agents/runtime-flow.md`](.dsh/agents/runtime-flow.md) |
 | 改图像增强、灯带提取、中心线、暗斑检测 | [`.dsh/agents/vision.md`](.dsh/agents/vision.md) |
 | 改巡线控制、90° 转弯、起终点、丢线恢复 | [`.dsh/agents/control.md`](.dsh/agents/control.md) |
 | 改上报时机、去重、防误报、声光与语音 | [`.dsh/agents/reporting.md`](.dsh/agents/reporting.md) |
@@ -63,6 +64,8 @@
 | `AGENTS.md` | 本文件：索引 + 工作方式 + 红线 + 路由表 + 目录结构（**给智能体**） |
 | `README.md` | 开发者入口：架构总览、`.dsh/` 与 `AGENTS.md` 的用法、`src/` 各模块职责、怎么跑（**给人**） |
 | `backlog.md` | 已知但未完成的事，按「卡住什么」分组 |
+| `pyproject.toml` | 打包元数据：包名、依赖、可选硬件 extras、命令行入口——**依赖与版本的唯一住所** |
+| `requirements.txt` | 部署快捷方式，只含 `-e .` 指向 `pyproject.toml`；**不要再抄一份版本号** |
 | `.gitignore` | 什么不进版本控制，以及为什么 |
 | `.dsh/agents/` | 分主题的项目事实、设计决定、不变量、排查流程 |
 | `.dsh/logs/` | 面向开发者的过程记录（当时快照，不改写正文） |
@@ -93,6 +96,6 @@
 ## 相关文档
 
 - [`README.md`](README.md)——**给人**的开发者入口：架构总览、`.dsh/` 与 `AGENTS.md` 怎么用、`src/` 各模块职责、怎么跑
-- `.dsh/agents/`——赛题事实、硬件约束、架构、视觉、控制、上报、策略、不变量、排查、操作、写法
+- `.dsh/agents/`——赛题事实、硬件约束、架构、**代码运行顺序**、视觉、控制、上报、策略、不变量、排查、操作、写法
 - `.dsh/logs/README.md`——开发日志索引
 - `.dsh/skills/dsh-agent-init/SKILL.md`——**本知识体系自身的方法论**，用同样的方式给新项目初始化 `.dsh/`

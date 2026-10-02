@@ -32,6 +32,7 @@
 | --- | --- |
 | 知道比赛规则、判罚、评分表 | [`.dsh/agents/competition.md`](.dsh/agents/competition.md) |
 | 知道系统怎么搭的、模块之间怎么联动 | [`.dsh/agents/architecture.md`](.dsh/agents/architecture.md) |
+| 知道**代码每帧按什么顺序跑、该从哪读起** | [`.dsh/agents/runtime-flow.md`](.dsh/agents/runtime-flow.md) |
 | 知道**现在卡在哪、该问谁** | [`backlog.md`](backlog.md) |
 | 动手前核对红线 | [`.dsh/agents/invariants.md`](.dsh/agents/invariants.md) |
 | 排查「跑偏 / 丢线 / 漏检 / 误报 / 弯角过不去」 | [`.dsh/agents/troubleshooting.md`](.dsh/agents/troubleshooting.md) |
@@ -47,6 +48,8 @@
 | `AGENTS.md` | **给智能体**的入口：索引 + 分支纪律 + 红线 + 路由表 + 目录结构 |
 | `README.md` | **给人**的入口：就是这份 |
 | `backlog.md` | 已知但未完成的事，按「卡住什么」分组 |
+| `pyproject.toml` | 打包元数据：`src/bionic_fish` 是**可安装的包**，依赖与版本只在这里定义 |
+| `requirements.txt` | 部署快捷方式（只含 `-e .`），指向 `pyproject.toml` |
 | `.dsh/agents/` | 分主题的项目事实、设计决定、不变量、排查流程 |
 | `.dsh/logs/` | 开发过程记录（当时快照，**不改写正文**） |
 | `.dsh/skills/` | 项目内技能入口（软链接到用户级源文件，本身不入库） |
@@ -152,6 +155,7 @@ python3 .dsh/tools/check-links.py .
 | `platform.py` | 硬件出口：`Link` 协议（`SimLink` 记录型 / `MavlinkLink` 真机）、`Annunciator` 声光与 `Speaker` 播报 | **唯一**硬件出口，所以整条链路能在没有硬件的机器上跑完。只开一条 MAVLink 连接（MAVLink 流只有一个读者）；解锁校验 `COMMAND_ACK`；声光非阻塞 |
 | `plant.py` | 占位动力学，让控制环能闭环 | **全部参数是占位值**（文件头已写明）。增益与提交转角长度都建立在它之上——**对着它调参等于拟合虚构** |
 | `runtime.py` | 组装与主循环：`Runner`（合成闭环 / 录像回放 / 相机）、`RunLog`、`evaluate_scoring` | 一帧一循环、从不 sleep（参考项目在控制环里 `cv2.imshow` + 阻塞 `sleep`）。每条日志能回答「这次为什么报了 / 没报」 |
+| `__main__.py` | 命令行入口：`python -m bionic_fish` 跑一场并打印摘要，`--trace` 打逐帧表 | **运行顺序在这里变成可观察的数据**。它是调试前端，不是比赛程序 |
 | `__init__.py` | 包说明与模块地图 | — |
 
 ### 这份实现是**参考实现**
@@ -169,15 +173,29 @@ python3 .dsh/tools/check-links.py .
 ```sh
 conda activate aquacore
 
+# 可编辑安装一次。装完就不需要 PYTHONPATH=src 了
+pip install -e .
+
+# 跑一场合成闭环并打印摘要 —— 没有相机、没有鱼也能跑完
+python -m bionic_fish
+
+# 加上逐帧表：把「每帧按什么顺序跑」变成可观察的数据
+python -m bionic_fish --trace --trace-limit 40
+
+# 换一个起始条件（默认 -30mm 是已知能跑完全程的那条）
+python -m bionic_fish --lateral-mm 0
+
 # 跑测试（无需硬件；合成场地就是数据源）
-PYTHONPATH=src python -m unittest discover -s tests
+python -m unittest discover -s tests
 
 # 只跑感知层
-PYTHONPATH=src python -m unittest tests/test_perception.py
+python -m unittest tests/test_perception.py
 
 # 校验文档链接与锚点
 python3 .dsh/tools/check-links.py .
 ```
+
+不安装也能跑：把每条命令的 `python` 换成 `PYTHONPATH=src python` 即可（这正是没有打包元数据之前的唯一办法）。
 
 **注意**：测试用标准库 `unittest`，**不是 pytest**——`aquacore` 环境里没有 pytest。请用上面两条命令之一，不要把 `tests/` 当包调用（它不是包）。
 

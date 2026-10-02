@@ -1,0 +1,47 @@
+# Packaging metadata for the vision and control stack.
+#
+# This file is the single home for the dependency list and the version.  The
+# version is read from `bionic_fish.__version__` rather than repeated here, so
+# the two cannot drift.
+#
+# Layout: src-layout.  The importable package is `src/bionic_fish`; the project
+# root holds only documentation, configuration and the reference archive.
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bionic-fish"
+description = "Vision and control stack for the underwater pipe-inspection challenge (JSAI2025)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+dynamic = ["version"]
+
+# Everything needed to run the whole stack offline against the synthetic arena.
+# Keep this list minimal: the development machine has no camera, no autopilot and
+# no GPIO, and the stack must stay runnable there.
+dependencies = [
+    "numpy>=1.19",
+    "opencv-python>=4.5",
+    "PyYAML>=5.4",
+]
+
+[project.optional-dependencies]
+# Real-vehicle extras.  Split out because neither installs on a development
+# machine: pymavlink needs a serial peer, RPi.GPIO needs a Raspberry Pi.
+hardware = ["pymavlink>=2.4"]
+rpi = ["RPi.GPIO>=0.7"]
+
+[project.scripts]
+bionic-fish = "bionic_fish.__main__:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "bionic_fish.__version__" }
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]

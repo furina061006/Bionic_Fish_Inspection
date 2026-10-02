@@ -16,3 +16,4 @@
 | 2026-09-25 | [skill-repo](2026-09-25-skill-repo.md) | 给 `dsh-agent-init` 技能建独立仓库；仓库根为何选在技能目录（附发现规则的证据） |
 | 2026-09-26 | [branch-gate](2026-09-26-branch-gate.md) | 新增开发者 README；把一次提交误落到 `main` 的事故与根因（检查没当闸门用）；`AGENT.md` 为何不能用 |
 | 2026-10-02 | [control-concurrency](2026-10-02-control-concurrency.md) | 评估「两个线程互抢控制权」的设想并否掉（`aim()` 的 6 次发送会交错成「急转 + 全速」）；定下按时间尺度切线程、唯一写者 + 固定节拍 + 看门狗；查实 RC override 会超时 |
+| 2026-10-02 | [package-and-entry-point](2026-10-02-package-and-entry-point.md) | 查证参考项目确有 4 个业务子包（我原先判断错了）；决定我方保持扁平包并留下拆分触发器；补 `pyproject.toml` + 命令行入口 + `--trace`；新增运行顺序文档 |

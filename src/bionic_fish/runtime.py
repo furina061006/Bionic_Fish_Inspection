@@ -14,6 +14,12 @@ The loop deliberately processes one frame per iteration and never sleeps.  The
 reference project called ``cv2.imshow`` and ``cv2.waitKey`` inside its control
 loop and used blocking ``sleep`` calls for timed turns, neither of which can
 coexist with a 20 Hz control requirement.
+
+The order that loop imposes on the stack is invisible in the stages themselves,
+because each stage is called once per frame and knows nothing about the others.
+It is recorded, one row per frame, when the runner is built with ``trace=True``
+(see :class:`FrameTrace`), and printed by the command line front end in
+:mod:`bionic_fish.__main__` (``python -m bionic_fish --trace``).
 """
 
 from __future__ import annotations
@@ -35,6 +41,33 @@ from .vision import CrossLineDetector, MarkerDetector, StripTracker
 
 #: One frame of the run, as the loop sees it.
 FrameSource = Iterable[tuple[float, np.ndarray]]
+
+
+@dataclass
+class FrameTrace:
+    """One row of the per-frame trace.
+
+    The order in which a frame moves through the stack is not visible in any
+    single module: every stage is called once per frame by :meth:`Runner._iterate`
+    and none of them knows about the others.  This is the instrument that makes
+    that order observable, so the fields are ordered the way the stages run.
+    """
+
+    t_s: float
+    state: str
+    line_valid: bool
+    e_y_px: float
+    e_theta_rad: float
+    strip_width_px: float
+    confidence: float
+    #: Candidates found this frame, and reports emitted from them.
+    candidates: int
+    reports: int
+    #: What the state machine asked for, then what control actually sent.
+    target_forward_us: int
+    yaw_us: int
+    forward_us: int
+    note: str
 
 
 @dataclass
@@ -62,6 +95,9 @@ class RunLog:
     strip_valid_ratio: float = 0.0
     #: True when the run reached the finish state.
     finished: bool = False
+    #: Per-frame trace, one row per frame.  Empty unless the runner was built
+    #: with ``trace=True``.
+    trace: list[FrameTrace] = field(default_factory=list)
 
     @property
     def mean_abs_lateral_px(self) -> float:
@@ -88,9 +124,14 @@ class Runner:
         *,
         link: Link | None = None,
         annunciator: Annunciator | None = None,
+        trace: bool = False,
     ) -> None:
         self.cfg = cfg
         self.arena = arena
+        #: Record one :class:`FrameTrace` per frame.  Off by default: a long run
+        #: holds one row per frame, which is the point when reading the loop back
+        #: and pure overhead when not.
+        self.trace = trace
         self.tracker = StripTracker(cfg.strip, cfg.calibration)
         self.markers = MarkerDetector(cfg.marker, cfg.calibration)
         self.cross = CrossLineDetector(cfg.marker, cfg.calibration)
@@ -114,7 +155,6 @@ class Runner:
         self,
         frames: FrameSource,
         *,
-        dt_s: float,
         plant: VehiclePlant | None,
         max_steps: int,
     ) -> RunLog:
@@ -162,6 +202,24 @@ class Runner:
             if line.valid:
                 valid_frames += 1
                 log.lateral_errors_px.append(line.e_y_px)
+            if self.trace:
+                log.trace.append(
+                    FrameTrace(
+                        t_s=now_s,
+                        state=decision.state.value,
+                        line_valid=line.valid,
+                        e_y_px=line.e_y_px,
+                        e_theta_rad=line.e_theta_rad,
+                        strip_width_px=line.strip_width_px,
+                        confidence=line.confidence,
+                        candidates=len(cands),
+                        reports=len(events),
+                        target_forward_us=decision.target_forward_us,
+                        yaw_us=actuator.yaw_us,
+                        forward_us=actuator.forward_us,
+                        note=decision.note,
+                    )
+                )
             if decision.terminal:
                 log.abort = decision.abort.value if decision.abort else None
                 log.finished = decision.state is State.DONE
@@ -220,7 +278,7 @@ class Runner:
                 yield step * dt_s, self.arena.view(x, y, yaw)
                 step += 1
 
-        return self._iterate(frames(), dt_s=dt_s, plant=plant, max_steps=max_steps)
+        return self._iterate(frames(), plant=plant, max_steps=max_steps)
 
     # ------------------------------------------------------------------- replay
 
@@ -239,7 +297,7 @@ class Runner:
         file, a directory of images, or a camera, and nothing else changes.
         """
         self.machine.start(start_at_s)
-        return self._iterate(frames, dt_s=dt_s, plant=None, max_steps=max_steps)
+        return self._iterate(frames, plant=None, max_steps=max_steps)
 
     # ------------------------------------------------------------------- camera
 
