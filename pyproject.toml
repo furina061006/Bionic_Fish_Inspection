@@ -29,9 +29,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Real-vehicle extras.  Split out because neither installs on a development
-# machine: pymavlink needs a serial peer, RPi.GPIO needs a Raspberry Pi.
-hardware = ["pymavlink>=2.4"]
+# Real-vehicle extras.  Split out because neither installs usefully on a
+# development machine: pymavlink needs a serial peer, RPi.GPIO needs a Pi.
+#
+# pyserial is easy to miss: pymavlink does not depend on it, but a serial
+# endpoint (``/dev/ttyACM0``) goes through mavutil.mavserial, which imports
+# ``serial``.  Without it, connect() fails with a bare ModuleNotFoundError.
+hardware = ["pymavlink>=2.4", "pyserial>=3.5"]
 rpi = ["RPi.GPIO>=0.7"]
 
 [project.scripts]

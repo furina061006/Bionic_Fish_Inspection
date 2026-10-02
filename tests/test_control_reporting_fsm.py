@@ -17,8 +17,10 @@ import dataclasses
 import math
 import unittest
 
+from bionic_fish.arena import Arena
 from bionic_fish.config import (
     AnnunciatorParams,
+    ChannelMap,
     Config,
     ControlParams,
     FsmParams,
@@ -26,11 +28,19 @@ from bionic_fish.config import (
     MarkerParams,
     ReportParams,
     SafetyParams,
+    load_config,
 )
 from bionic_fish.control import Actuator, LineController, Pid
 from bionic_fish.fsm import AbortReason, SafetyMonitor, State, StateMachine
-from bionic_fish.platform import Annunciator, LoggingSpeaker, RecordingGpio, SimLink
+from bionic_fish.platform import (
+    Annunciator,
+    LoggingSpeaker,
+    MavlinkLink,
+    RecordingGpio,
+    SimLink,
+)
 from bionic_fish.reporting import Reporter, candidate_score
+from bionic_fish.runtime import Runner
 from bionic_fish.vision import CrossObs, LineObs, MarkerCand
 
 
@@ -618,6 +628,79 @@ class SimLinkTest(unittest.TestCase):
         self.assertFalse(link.armed)
         link.close()
         self.assertTrue(link.closed)
+
+
+class _RefusingLink(SimLink):
+    """A link whose autopilot will not arm."""
+
+    def arm(self) -> bool:
+        return False
+
+
+class RunArmedTest(unittest.TestCase):
+    """The real-vehicle lifecycle: arm, run, and *always* disarm.
+
+    These are the only tests that can hold the hardware path to account without
+    hardware, and they guard two failures that are invisible in a log: a run that
+    never armed (the vehicle does not move, everything else looks fine) and a run
+    that never disarmed (the vehicle keeps executing the last command after the
+    process is gone).
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.cfg = load_config()
+        cls.arena = Arena(calibration=cls.cfg.calibration)
+
+    def _runner(self, link):
+        return Runner(self.cfg, self.arena, link=link)
+
+    def test_arms_before_the_loop_and_disarms_after(self) -> None:
+        link = SimLink()
+        log = self._runner(link).run_armed(self.arena_frames(6), max_steps=6)
+        self.assertEqual(log.frames, 6)
+        self.assertFalse(link.armed, "the link must be disarmed when the run ends")
+        self.assertTrue(link.sent, "the run must actually have transmitted frames")
+
+    def test_a_refused_arm_stops_the_run_instead_of_running_open_loop(self) -> None:
+        """An un-armed autopilot still accepts stick commands, so a silent
+        continue would fill a log with plausible numbers and move nothing."""
+        link = _RefusingLink()
+        with self.assertRaises(RuntimeError):
+            self._runner(link).run_armed(self.arena_frames(6), max_steps=6)
+        self.assertFalse(link.sent, "nothing may be transmitted after a refused arm")
+
+    def test_disarms_even_when_the_loop_raises(self) -> None:
+        link = SimLink()
+
+        def exploding():
+            yield 0.0, self.arena.view(600.0, 500.0, 0.0)
+            raise KeyboardInterrupt("operator pressed Ctrl-C")
+
+        with self.assertRaises(KeyboardInterrupt):
+            self._runner(link).run_armed(exploding(), max_steps=6)
+        self.assertFalse(link.armed, "Ctrl-C must not leave the vehicle armed")
+
+    def arena_frames(self, count: int):
+        """A short synthetic straight, as the loop's frame source."""
+        (x0, y0), heading = self.arena.spec.point_at(350.0)
+        for i in range(count):
+            yield i * 0.05, self.arena.view(x0 + i * 20.0, y0, heading)
+
+
+class MavlinkConnectTest(unittest.TestCase):
+    def test_connect_reports_failure_instead_of_raising(self) -> None:
+        """A bench with nothing plugged in must produce one actionable line.
+
+        The docstring of ``connect`` promises a returned failure; before this
+        test the implementation let the driver's exception escape, so a missing
+        ``pyserial`` surfaced as twenty frames of traceback around the one
+        sentence that mattered.
+        """
+        link = MavlinkLink("/dev/definitely-not-a-device", 115200, ChannelMap())
+        self.assertFalse(link.connect(heartbeat_timeout_s=0.1))
+        self.assertIsNotNone(link.last_error, "the reason must be retrievable")
+        self.assertIn("/dev/definitely-not-a-device", link.device)
 
 
 if __name__ == "__main__":

@@ -51,6 +51,40 @@ from .vision import CrossLineDetector, MarkerDetector, StripTracker
 FrameSource = Iterable[tuple[float, np.ndarray]]
 
 
+def camera_frames(device: int = 0) -> Iterator[tuple[float, np.ndarray]]:
+    """Yield ``(timestamp_s, frame)`` from a live camera.
+
+    The single implementation of "read a camera", used by
+    :meth:`Runner.run_camera` and by the ``--vehicle`` path, so that the two
+    cannot drift.
+
+    Timestamps come from :func:`time.monotonic` - the same clock the loop uses to
+    derive ``dt``.  A wall-clock timestamp would make every derivative term
+    depend on how the system clock happened to be set.
+
+    Raises ``RuntimeError`` (not ``SystemExit``): a library should not decide to
+    end the process, and a caller that wants a one-line message can turn this
+    into one.
+    """
+    import cv2
+
+    capture = cv2.VideoCapture(device)
+    if not capture.isOpened():
+        raise RuntimeError(
+            f"camera {device} did not open - check /dev/video{device}, that no "
+            "other process holds it, and that the user is in the video group"
+        )
+    started = time.monotonic()
+    try:
+        while True:
+            ok, frame = capture.read()
+            if not ok:
+                return
+            yield time.monotonic() - started, frame
+    finally:
+        capture.release()
+
+
 @dataclass
 class FrameTrace:
     """One row of the per-frame trace.
@@ -312,27 +346,56 @@ class Runner:
     def run_camera(self, device: int = 0, *, dt_s: float = 0.05, max_steps: int = 4000) -> RunLog:
         """Run against a live camera.
 
-        Requires OpenCV with video capture and a camera on the host; neither is
-        available on the development machine, so this path is UNVERIFIED.
+        Requires OpenCV with video capture and a camera on the host.  Frame
+        capture is :func:`camera_frames`.
         """
-        import cv2
+        return self.run_frames(camera_frames(device), dt_s=dt_s, max_steps=max_steps)
 
-        capture = cv2.VideoCapture(device)
-        if not capture.isOpened():
-            raise RuntimeError(f"camera {device} did not open")
+    # ------------------------------------------------------------------- armed
 
-        def frames() -> Iterator[tuple[float, np.ndarray]]:
-            started = time.monotonic()
-            while True:
-                ok, frame = capture.read()
-                if not ok:
-                    return
-                yield time.monotonic() - started, frame
+    def run_armed(
+        self,
+        frames: FrameSource,
+        *,
+        dt_s: float = 0.05,
+        max_steps: int = 100_000,
+        start_at_s: float = 0.0,
+    ) -> RunLog:
+        """Run frames with the vehicle armed for exactly the duration of the run.
 
+        This is the real-vehicle entry point.  Everything else in this class is
+        pure logic and works with a recording link; this method is the only place
+        that expects the link to be able to move something.
+
+        Two decisions worth stating:
+
+        * **A refused arm is fatal, not a degraded mode.**  An un-armed ArduSub
+          still accepts ``RC_CHANNELS_OVERRIDE`` and still reports a heading, so
+          the program would run to completion, fill a log with plausible numbers
+          and move nothing.  Failing loudly costs one bench run; failing quietly
+          costs a competition round.
+        * **``disarm`` is in a ``finally``, and that is a safety requirement, not
+          tidiness.**  Without it, exiting the loop - on a terminal state, on an
+          exception, or on Ctrl-C - leaves the autopilot holding the last stick
+          command, so the vehicle keeps swimming while nobody is watching.  Under
+          this competition that is how you collect wall contacts.
+
+        The caller is responsible for connecting the link first: a
+        :class:`~bionic_fish.platform.MavlinkLink` that has not seen a heartbeat
+        returns ``False`` from ``arm()``.
+        """
+        if not self.link.arm():
+            raise RuntimeError(
+                "the link refused to arm - is the autopilot connected? "
+                "refusing to run: an un-armed run produces a full, plausible, "
+                "meaningless log"
+            )
         try:
-            return self.run_frames(frames(), dt_s=dt_s, max_steps=max_steps)
+            return self.run_frames(
+                frames, dt_s=dt_s, max_steps=max_steps, start_at_s=start_at_s
+            )
         finally:
-            capture.release()
+            self.link.disarm()
 
 
 def evaluate_scoring(log: RunLog, *, true_leaks: int = 8) -> dict[str, float]:

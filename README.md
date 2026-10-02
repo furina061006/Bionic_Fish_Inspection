@@ -56,6 +56,7 @@
 | `.dsh/tools/` | 校验脚本 |
 | `src/` | 实现代码 |
 | `tests/` | 测试 |
+| `deploy/` | 部署：systemd 单元。启动方式与时机见 [`.dsh/agents/operations.md`](.dsh/agents/operations.md) |
 | `docs/` | 权威输入：赛题 PDF 与提取出的场地图 |
 | `reference/` | 第三方参考存档（只读，**不入库**） |
 

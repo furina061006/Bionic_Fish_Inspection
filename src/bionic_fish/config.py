@@ -643,7 +643,14 @@ class Config:
     #: FACT: the reference platform uses ``/dev/ttyACM0`` at 115200.
     mavlink_device: str = "/dev/ttyACM0"
     mavlink_baud: int = 115200
-    #: Directory for run artefacts.  ``None`` disables frame dumping.
+    #: Directory for run artefacts (raw frames, masks, the per-frame decision
+    #: log).  **NOT IMPLEMENTED YET** - nothing reads this field today; it is
+    #: declared here so the knob has one home when it is wired up.
+    #:
+    #: It is kept rather than deleted because [architecture](../../.dsh/agents/architecture.md)
+    #: section 8.1 makes frame dumping a requirement: the recorded frames are the
+    #: only evidence available when a run goes wrong at the pool and cannot be
+    #: reproduced.  Tracked in backlog.md.
     artefact_dir: str | None = None
 
     def validate(self) -> None:

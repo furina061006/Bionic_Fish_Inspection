@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import time
 from collections import Counter
 from pathlib import Path
 from typing import Iterator
@@ -43,7 +44,8 @@ import numpy as np
 
 from .arena import Arena
 from .config import Config, load_config
-from .runtime import RunLog, Runner, evaluate_scoring
+from .platform import Annunciator, Link, MavlinkLink
+from .runtime import RunLog, Runner, camera_frames, evaluate_scoring
 
 #: Synthetic start distance along the route, millimetres.  The default camera and
 #: route are calibrated with this row.
@@ -81,6 +83,33 @@ def _video_frames(path: Path) -> Iterator[tuple[float, np.ndarray]]:
             index += 1
     finally:
         capture.release()
+
+
+def _camera_frames(device: int) -> Iterator[tuple[float, np.ndarray]]:
+    """The live-camera frame source.
+
+    A thin alias for :func:`bionic_fish.runtime.camera_frames`, kept so that the
+    ``--vehicle`` path and ``Runner.run_camera`` provably use the same reader.
+    """
+    return camera_frames(device)
+
+
+def _build_vehicle_io(cfg: Config, args: argparse.Namespace) -> tuple[Link, Annunciator]:
+    """Build the two objects that touch hardware.
+
+    This is the only place in the package that constructs a real link or a real
+    GPIO backend, so it is the only place that has to change when the interface
+    to the vehicle is settled.  Both are *injected* into ``Runner``, which is why
+    no module in the logic chain has to know whether it is on a fish or a bench.
+
+    UNVERIFIED on hardware.  ``Annunciator.for_host`` falls back to a recorder
+    when ``RPi.GPIO`` is absent, which is what lets this same function run on a
+    development machine instead of failing at import.
+    """
+    device = args.device or cfg.mavlink_device
+    link = MavlinkLink(device, cfg.mavlink_baud, cfg.channels)
+    annunciator = Annunciator.for_host(cfg.annunciator)
+    return link, annunciator
 
 
 # -------------------------------------------------------------------------- printing
@@ -198,7 +227,27 @@ def _parser() -> argparse.ArgumentParser:
         "--camera",
         type=int,
         metavar="INDEX",
-        help="run against a live camera; UNVERIFIED on real hardware",
+        help=(
+            "live camera, but with the RECORDING link: the whole stack runs and "
+            "transmits nothing.  Use this to check perception on the bench"
+        ),
+    )
+    source.add_argument(
+        "--vehicle",
+        action="store_true",
+        help=(
+            "the real thing: MAVLink link + GPIO annunciator + camera, armed for "
+            "the duration of the run.  See .dsh/agents/operations.md"
+        ),
+    )
+    parser.add_argument(
+        "--camera-index", type=int, default=0, metavar="N", help="camera used by --vehicle [0]"
+    )
+    parser.add_argument(
+        "--device",
+        default=None,
+        metavar="DEV",
+        help="MAVLink device, overriding config.mavlink_device (e.g. /dev/ttyACM0)",
     )
     parser.add_argument("--steps", type=int, default=3000, help="maximum frames [3000]")
     parser.add_argument("--dt", type=float, default=0.05, help="synthetic period, s [0.05]")
@@ -229,6 +278,39 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _run(args: argparse.Namespace, cfg: Config, arena: Arena, steps: int) -> RunLog:
+    """Dispatch to the run mode the arguments asked for."""
+    if args.vehicle:
+        link, annunciator = _build_vehicle_io(cfg, args)
+        runner = Runner(cfg, arena, link=link, annunciator=annunciator, trace=args.trace)
+        if not link.connect():
+            raise SystemExit(
+                f"no autopilot on {link.device}: {link.last_error}\n"
+                "  - is the flight controller powered and plugged in?\n"
+                "  - is the device path right (config.mavlink_device / --device)?\n"
+                "  - is the port already held by another process?\n"
+                "  - on a bench with no autopilot, use --camera instead: it runs the\n"
+                "    whole stack against a live camera and transmits nothing."
+            )
+        try:
+            return runner.run_armed(_camera_frames(args.camera_index), dt_s=args.dt, max_steps=steps)
+        finally:
+            link.close()
+
+    runner = Runner(cfg, arena, trace=args.trace)
+    if args.video is not None:
+        return runner.run_frames(_video_frames(args.video), dt_s=args.dt, max_steps=steps)
+    if args.camera is not None:
+        return runner.run_camera(args.camera, dt_s=args.dt, max_steps=steps)
+    return runner.run_synthetic(
+        dt_s=args.dt,
+        max_steps=steps,
+        start_s_mm=args.start_mm,
+        lateral_mm=args.lateral_mm,
+        yaw_error_rad=math.radians(args.yaw_error_deg),
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run one episode and print a report.  Returns a process exit code."""
     args = _parser().parse_args(argv)
@@ -237,21 +319,15 @@ def main(argv: list[str] | None = None) -> int:
     # Constructing the arena is cheap - the floor is rendered lazily on the first
     # camera view - so it is built even for replay, where it is unused.
     arena = Arena(calibration=cfg.calibration)
-    runner = Runner(cfg, arena, trace=args.trace)
-
     steps = max(1, args.steps)
-    if args.video is not None:
-        log = runner.run_frames(_video_frames(args.video), dt_s=args.dt, max_steps=steps)
-    elif args.camera is not None:
-        log = runner.run_camera(args.camera, dt_s=args.dt, max_steps=steps)
-    else:
-        log = runner.run_synthetic(
-            dt_s=args.dt,
-            max_steps=steps,
-            start_s_mm=args.start_mm,
-            lateral_mm=args.lateral_mm,
-            yaw_error_rad=math.radians(args.yaw_error_deg),
-        )
+
+    try:
+        log = _run(args, cfg, arena, steps)
+    except RuntimeError as exc:
+        # The library raises RuntimeError for "the environment is not right" -
+        # no camera, a refused arm.  A command line front end owes the operator
+        # one actionable line, not twenty frames of traceback wrapped around it.
+        raise SystemExit(str(exc))
 
     _print_summary(log)
     _print_reports(log)

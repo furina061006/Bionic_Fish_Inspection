@@ -73,6 +73,47 @@
   3. 能在**树莓派**上跑起来（不是开发机；树莓派无 CUDA，[hardware](hardware.md) 的 GPU 只用于训练，不用于部署）
 - 【设计】目录结构按 [architecture](architecture.md) 的四层划分：`vision` / `estimator` / `fsm`+`reporting` / `control`，外加一个 `platform` 适配层隔离飞控接口
 
+## 上真机：启动与部署
+
+**先说清楚：这不是固件。** 没有烧录、没有 bootloader —— 它是一个 Python 包，启动就是启动一个进程。
+
+- 【事实】命令行入口是 `python -m bionic_fish`（[`__main__.py`](../../src/bionic_fish/__main__.py)）；真机上先装一次 `pip install -e ".[hardware,rpi]"`，之后就不需要 `PYTHONPATH=src`
+- 【事实】三种模式的区别**只在「接不接真硬件」**：
+
+| 模式 | 命令 | 链路 | 声光 | 真的开相机 | 鱼会不会动 |
+| --- | --- | --- | --- | --- | --- |
+| 合成 | `python -m bionic_fish` | `SimLink` | 记录 | 否（合成帧） | 否 |
+| **台架** | `python -m bionic_fish --camera 0` | `SimLink` | 记录 | **是** | **否** |
+| **实物** | `python -m bionic_fish --vehicle` | `MavlinkLink` | **真 GPIO** | **是** | **是** |
+
+- 【设计】`--camera` 是**台架模式**：整条链路照常跑、日志照常记，**但一条指令都不发**。这是有意的 —— 它让你在没有水池的时候验证感知，而不必担心鱼跑掉
+- 【事实】`--vehicle` 的顺序是：连 MAVLink（等心跳）→ 解锁（校验 `COMMAND_ACK`）→ 跑 → **无论怎么退出都上锁**（`finally`）
+- 【设计】解锁失败**直接报错退出**，不降级继续。未解锁的 ArduSub 仍然接受 `RC_CHANNELS_OVERRIDE`、仍然报航向，所以程序会跑完、日志会很漂亮、鱼一动不动 —— **安静地失败是最贵的失败方式**
+- 【设计】`disarm` 放在 `finally` 里是**安全要求**，不是整洁：终端状态、异常、Ctrl-C 任何一条退出路径如果不解锁，飞控会保持最后一根杆位，鱼会在没人看的时候继续游
+
+**开机自启**：[`deploy/bionic-fish.service`](../../deploy/bionic-fish.service)
+
+```sh
+sudo cp deploy/bionic-fish.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl start bionic-fish
+journalctl -u bionic-fish -f
+```
+
+- 【事实】该单元**故意没有 `[Install]` 段**，也就是**默认不随开机启动**，理由见下面的 IMPORTANT
+- 【设计】`Restart=no`：重启会重新解锁并开一趟新的巡检。`Restart=always` 会把「中途崩溃」变成「鱼自己在池子里又出发一次」
+
+> [!IMPORTANT]
+> **启动时机尚未决定。** 规则禁止远程操控与人工干预，而鱼在 10 分钟调试窗口内就已经在池子里了。所以「服务启动了」**不能**等于「比赛开始了」，否则鱼会在队伍还在标定的时候就出发。
+>
+> 三个候选（一个都没定）：① 物理开关，裁判宣布时由队员扳；② 固定延时 + 宣布时上电（`ExecStartPre=/bin/sleep N`）；③ 入水检测。
+> 无论选哪个，都必须满足「裁判宣布开始后 30 秒未启动即结束」—— 那条计时**从宣布开始算，不是从上电算**。
+>
+> 在定下来之前：**手动启动服务**。
+
+- 【待验证】`--vehicle` 这条路**完全没在真机上跑过**。已验证的只有三件，都是用假设备测的：解锁失败的报错、`finally` 里的解锁（含 Ctrl-C 路径）、连接失败的文案。真实串口、真实飞控、真实 GPIO 全是空白
+- 【待验证】`artefact_dir`（原始帧落盘）**尚未实现**：架构 8.1 把它列为硬要求，但目前没有任何代码读这个配置项。它是出事时唯一的证据，见 [backlog](../../backlog.md)
+
 ## 标定
 
 ### 离线标定（赛前，用实物 + 水池）
@@ -158,3 +199,4 @@
 | 日期 | 变更 |
 | --- | --- |
 | 2026-09-25 | 首次建立：现状表、8 项未决问题、标定流程、10 分钟调试窗口脚本、测试阶梯、比赛日清单、记录规范 |
+| 2026-10-02 | 新增「上真机：启动与部署」一节：三种模式（合成 / 台架 / 实物）的区别表、`--vehicle` 的解锁与**必上锁**理由、systemd 单元与 `Restart=no` 的理由、**启动时机未决**（三个候选，且必须满足 30 秒规则）；标出 `--vehicle` 与 `artefact_dir` 两处空白 |

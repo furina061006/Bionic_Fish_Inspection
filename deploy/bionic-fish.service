@@ -1,0 +1,74 @@
+# systemd unit for the competition run on the Raspberry Pi.
+#
+# Install on the fish:
+#
+#     sudo cp deploy/bionic-fish.service /etc/systemd/system/
+#     sudo systemctl daemon-reload
+#     sudo systemctl start bionic-fish        # run once, now
+#     journalctl -u bionic-fish -f           # watch it
+#
+# It is deliberately NOT enabled at boot by default.  See "start trigger" below.
+#
+# ---------------------------------------------------------------------------
+# Why each non-obvious setting is here
+# ---------------------------------------------------------------------------
+#
+# Restart=no
+#     A restart re-arms the autopilot and starts a fresh run, because
+#     `Runner.run_armed` arms on entry.  With Restart=always, any crash mid-run
+#     becomes "the fish sets off again on its own", in a pool, with the judges
+#     watching.  A crash should end the attempt, not repeat it.
+#
+# User / SupplementaryGroups
+#     /dev/ttyACM0 needs the `dialout` group and /dev/video* needs `video`.
+#     Running as root also works and is the path of least resistance; prefer
+#     groups plus a dedicated user, and check with `ls -l /dev/ttyACM0`.
+#
+# StandardOutput=append
+#     The console log is the only record of *why* a run ended.  `journalctl`
+#     works too, but a plain file survives a journald that was never configured
+#     and is trivial to copy off the Pi afterwards.
+#
+# TimeoutStopSec
+#     On `systemctl stop`, systemd sends SIGTERM.  Python raises KeyboardInterrupt,
+#     which unwinds through the `finally` in `run_armed` and disarms.  Give that
+#     path time to finish before SIGKILL arrives - a SIGKILLed run leaves the
+#     autopilot holding the last stick command, which is exactly the failure the
+#     `finally` exists to prevent.
+#
+# ---------------------------------------------------------------------------
+# START TRIGGER - not decided yet
+# ---------------------------------------------------------------------------
+# The rules forbid remote control and any human intervention during the run, and
+# the fish is already in the pool during the 10-minute practice window.  So
+# "the service started" must NOT equal "the run started", or the fish will set
+# off while the team is still calibrating.
+#
+# Options, none of them chosen yet:
+#   * a physical switch that the team flips when the judge announces the start;
+#   * a fixed delay after boot (`ExecStartPre=/bin/sleep N`) with the team
+#     powering the fish on at the announcement;
+#   * a first-motion heuristic (start when the vehicle is placed in the water).
+# Whatever is chosen has to satisfy the 30-second "did not start" termination
+# rule, which is measured from the judge's announcement, not from boot.
+# Until this is settled, start the service by hand.
+
+[Unit]
+Description=Bionic fish inspection run (vision + control)
+After=multi-user.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/pi/bionic_fish
+# The editable install makes `python -m bionic_fish` work without PYTHONPATH.
+ExecStart=/home/pi/bionic_fish/.venv/bin/python -m bionic_fish --vehicle
+Restart=no
+TimeoutStopSec=10
+# Unbuffered, so the log file is useful if the process is killed.
+Environment=PYTHONUNBUFFERED=1
+User=pi
+SupplementaryGroups=dialout video
+StandardOutput=append:/var/log/bionic-fish.log
+StandardError=append:/var/log/bionic-fish.log
+
+# No [Install] section on purpose: see "start trigger" above.

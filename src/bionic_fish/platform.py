@@ -148,22 +148,40 @@ class MavlinkLink:
         self._mavlink = None
         self._yaw: float | None = None
         self._yaw_at: float | None = None
+        #: Why the last :meth:`connect` failed, or ``None`` when it succeeded.
+        self.last_error: str | None = None
 
     # ------------------------------------------------------------- connection
 
     def connect(self, *, heartbeat_timeout_s: float = 30.0) -> bool:
         """Open the link and wait for a heartbeat.
 
-        Returns whether the autopilot was found.  A missing autopilot must be a
-        returned failure, not an exception, so a bench run can report it and
-        continue in a degraded mode.
+        Returns whether the autopilot was found.  A missing autopilot, an absent
+        serial device, and a missing driver are all **returned failures rather
+        than exceptions**: the most likely case on a bench is simply that nothing
+        is plugged in, and that is not a defect in this program.  Turning it into
+        a traceback would bury the one actionable line in twenty frames of stack.
+
+        :attr:`last_error` carries the reason when this returns ``False``.
         """
         from pymavlink import mavutil  # imported lazily: absent on a bare host
 
         self._mavlink = mavutil.mavlink
-        self._master = mavutil.mavlink_connection(self.device, baud=self.baud)
-        heartbeat = self._master.wait_heartbeat(timeout=heartbeat_timeout_s)
-        return heartbeat is not None
+        try:
+            self._master = mavutil.mavlink_connection(self.device, baud=self.baud)
+            heartbeat = self._master.wait_heartbeat(timeout=heartbeat_timeout_s)
+        except Exception as exc:  # noqa: BLE001 - any driver failure is a reported failure
+            # Covers FileNotFoundError (no such device), ModuleNotFoundError
+            # (pymavlink without pyserial), and serial.SerialException (in use).
+            self._master = None
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            return False
+
+        if heartbeat is None:
+            self.last_error = f"no heartbeat within {heartbeat_timeout_s:g}s"
+            return False
+        self.last_error = None
+        return True
 
     @property
     def connected(self) -> bool:
