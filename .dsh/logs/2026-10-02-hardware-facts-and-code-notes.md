@@ -126,6 +126,8 @@ ModuleNotFoundError: No module named 'tests.test_perception'
 | 判别器走 YAML | `--config` 带 `darkness` + `val_band` 端到端可用；非法判别器仍被 `validate()` 拒绝 |
 | 文档链接 | 27 个文档 / 294 条链接全部可达 |
 | 打包 | wheel 重建成功，11 个模块齐全 |
+| **`--video` 回放** | **首次被跑过**：用合成场地写了一段 60 帧录像再回放，`run_frames` 链路走通（可见率 1.000、横向误差均值 0.2px、产出 1 次上报）。注意这仍是**合成**录像，不是真实水下素材 |
+| 配置往返 | `save_config` → `load_config` 逐字段一致，含 `heave=None` 与 `val_band` 元组。YAML 里写成列表也能被接受 |
 
 ## 七、留下的口子
 
