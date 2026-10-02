@@ -20,7 +20,7 @@ Two features are deliberate, because they are what make this vehicle hard:
 
 在链路里的位置
     每帧第 12 步（共 13 步，见 runtime.Runner._iterate），**只在合成模式存在**
-    上游：control.Actuator
+    上游：main.py 发出去的两个数（yaw_us / forward_us）
     下游：新位姿 → arena.view() 生成下一帧（闭环就是这样合上的）
     参数全部是占位值。**对着它调参等于拟合虚构**（.dsh/agents/control.md）
     已知错：它把偏航与前进当成两个独立轴（只把偏航力矩按速度缩放），而实车是
@@ -34,7 +34,6 @@ import math
 from collections import deque
 from dataclasses import dataclass, field
 
-from .control import Actuator
 
 
 @dataclass
@@ -56,7 +55,7 @@ class PlantParams:
 
 
 class VehiclePlant:
-    """Integrate a vehicle pose from actuator frames.
+    """Integrate a vehicle pose from one yaw/forward command per step.
 
     State is the arena-frame pose, so the plant and the synthetic camera share
     one coordinate system and a rendered frame is always consistent with the
@@ -88,11 +87,11 @@ class VehiclePlant:
             self._delay_steps = steps
             self._delay = deque(maxlen=steps + 1 if steps else 1)
 
-    def step(self, actuator: Actuator, dt_s: float) -> tuple[float, float, float]:
-        """Advance the pose by ``dt_s`` under ``actuator``."""
+    def step(self, yaw_us: float, forward_us: float, dt_s: float) -> tuple[float, float, float]:
+        """Advance the pose by ``dt_s`` under one yaw/forward command."""
         p = self.params
-        yaw_offset = actuator.yaw_us - self.neutral
-        forward_offset = actuator.forward_us - self.neutral
+        yaw_offset = yaw_us - self.neutral
+        forward_offset = forward_us - self.neutral
 
         # Transport delay: commands queue up and emerge later.
         self._delay.append((yaw_offset, forward_offset))

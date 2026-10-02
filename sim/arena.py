@@ -31,7 +31,7 @@ from typing import Iterator
 import cv2
 import numpy as np
 
-from .config import Calibration
+from bionic_fish.params import Params
 
 # --------------------------------------------------------------------------- #
 # Arena geometry (FACT, competition document p3)
@@ -263,11 +263,11 @@ class Arena:
     def __init__(
         self,
         spec: ArenaSpec | None = None,
-        calibration: Calibration | None = None,
+        calibration: Params | None = None,
         degrade: DegradeSpec | None = None,
     ) -> None:
         self.spec = spec or ArenaSpec()
-        self.calibration = calibration or Calibration()
+        self.calibration = calibration or Params()
         self.degrade = degrade or DegradeSpec()
         self._floor: np.ndarray | None = None
         self._markers = self.spec.marker_layout()

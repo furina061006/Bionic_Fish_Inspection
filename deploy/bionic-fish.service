@@ -61,7 +61,7 @@ After=multi-user.target
 Type=simple
 WorkingDirectory=/home/pi/bionic_fish
 # The editable install makes `python -m bionic_fish` work without PYTHONPATH.
-ExecStart=/home/pi/bionic_fish/.venv/bin/python -m bionic_fish --vehicle
+ExecStart=/home/pi/bionic_fish/.venv/bin/python -m bionic_fish
 Restart=no
 TimeoutStopSec=10
 # Unbuffered, so the log file is useful if the process is killed.
