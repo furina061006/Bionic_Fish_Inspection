@@ -2,6 +2,20 @@
 > [!WARNING]
 > **本文件描述的是 v0.1 的模块划分（`config` / `control` / `fsm` / `platform` / `reporting` / `runtime`），那些模块已在 2026-10-02 的线性重写中删除。**
 > 里面的**设计理由**（耦合约束、踩过的坑）仍然成立，但模块名与调用方式已变。
+
+> [!CAUTION]
+> **这套上报判决在 2026-10-02 的实现里没有了。** v0.1 的 `Reporter`（轨迹关联 + 三道闸 +
+> `candidate_score` 最弱一环打分 + `p > 3/8` 判决 + 10 个闸门计数器）整体被删，换成一个
+> 布尔量的去重加一条行阈值。**下面写的设计推导仍然成立**（阈值怎么来的、为什么不能用距离窗口），
+> 但代码里现在**只有「上限 8」这一半**。
+>
+> 实测代价（合成场地，居中起始）：干扰点会吃掉 8 次上报预算，把真漏油点挤掉 ——
+> 8 次上报里 **5 真 3 误 3 漏**。把 `params.dot_val_max` 从 255 压到 90 可回到 8/8、零误报，
+> 但那个 90 是渲染器的值，真机要用真实物料重量。详见
+> [runtime-flow](runtime-flow.md) 第六节。
+>
+> **要恢复置信度判决时，本文件是起点。** 下文里的 `MarkerCand` / `ReportEvent` / `Reporter`
+> 等都是 v0.1 的类型名，v2 里对应的是 `Dot` 与 `main.py` 里的几行。
 > 现行结构看 [`runtime-flow.md`](runtime-flow.md)，代码看 [`src/bionic_fish/main.py`](../../src/bionic_fish/main.py)。
 
 > 入口索引与工作约定在仓库根目录 [`AGENTS.md`](../../AGENTS.md)；本文件是 `.dsh/agents/` 知识库的一部分。
