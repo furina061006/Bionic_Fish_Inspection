@@ -150,7 +150,7 @@ def aim(pwm1, pwm2, pwm3):
 | 9 | **`patrol` 的输入帧不一致**：`_pipe1` 传 YOLO 画过框的 `frame2`，`_pipe2`/`_pipe3` 传原始 `frame` | `pipe2025_func.py:181` vs `:321`、`:425` | 红框/绿字会污染颜色分割阈值，三个阶段的视觉特性不一致 |
 | 10 | **`patrol` 调用位置不一致**：`_pipe3` 里在 `if ret:` 之外 | `pipe2025_func.py:425` | 读帧失败时用上一帧的陈旧画面继续控制 |
 | 11 | **`cv2.imshow` 在控制环内** | `pipeline.py:191-192` | 无显示器的树莓派上抛异常；有显示器时拖慢环周期 |
-| 12 | **四条独立 MAVLink 连接**并存（`move.py:9` 模块级、`arm_disarm.py:9`、`arm_disarm.py:32`、`pipe2025_func.py:73`） | 同上 | 串口资源与心跳混乱；`target_system` 可能在 `wait_heartbeat` 之前被读取；`_begin_init` 开的那条连上后**从未被使用** |
+| 12 | **四条独立 MAVLink 连接**并存（`move.py:9` 模块级、`arm_disarm.py:9`、`arm_disarm.py:32`、`pipe2025_func.py:68`） | 同上 | 串口资源与心跳混乱；`target_system` 可能在 `wait_heartbeat` 之前被读取；`_begin_init` 开的那条连上后**从未被使用** |
 | 13 | **硬编码魔数**：`1495/1499/1410/1650/1590/1550/34/40/2500/1000/110/100/120/50/0.25/0.3`，以及绝对路径 `/home/pi/pipe_new` | 全项目 | 换一台机器、换一个场地就要改代码；无法标定 |
 | 14 | **`from sympy import false`**，随后与 Python `True` 混用 | `pipe2025_func.py:3`、`:154`、`:234` | 为一个小写常量引入 sympy 重依赖；真假语义混乱 |
 | 15 | **`LED._light_blink` 里 `args` 与 `target` 不匹配**（同 7）；`_target_catch_thing` 先 Close 再 Open | `pipe2025_func.py:106-109` | 抓取动作语义可疑（关-开等于没抓） |
@@ -164,16 +164,16 @@ def aim(pwm1, pwm2, pwm3):
 | # | 缺陷 | 位置 | 后果 |
 | --- | --- | --- | --- |
 | 18 | **LED 引脚与代码不符**：模块 setup 的是 16 / 17 / 6，而 `green_on` / `blue_on` 实际写的是 **27 / 22**；`GPIO.setup(16, GPIO.HIGH)` 的第二参用了 `HIGH`（在 RPi.GPIO 里 `HIGH`=1=`IN`） | `LED.py:4-10`、`:18-28` | 绿、蓝灯首次输出抛 `RuntimeError`【推论】，只有红、紫可用；注释（`#RED IS 16` 等）与代码也全不对应 |
-| 19 | **夹爪线程被塞进 `light_control_thread`**，`catch_control_thread` 声明后从未使用 | `pipe2025_func.py:17`、`:132` | 变量名与内容不符，排查时误导 |
+| 19 | **夹爪线程被塞进 `light_control_thread`**，`catch_control_thread` 声明后从未使用 | `pipe2025_func.py:17`、`:127` | 变量名与内容不符，排查时误导 |
 | 20 | **`aim()` 每帧发 6 条消息**，未用通道填 `65535`（语义 = 不覆盖） | `move.py:31-36`、`:47-54` | 下一帧就把 `init()` 设的 `ch9=1100` **释放**掉【推论】，「灯通道」形同虚设 |
-| 21 | **`count` 一变量两用**：帧分频 `(count+1)%3` 与转弯去抖 `count += 1` | `pipe2025_func.py:170`、`:240` | 「连续 3 帧」的语义不严格，实际行为取决于重置相位 |
-| 22 | **两个阶段的转弯触发不一致**：`_pipe1` 有 3 帧去抖，`_pipe2` 下降沿当帧即转 | `:238` vs `:366` | 一次单帧误检就能触发转弯 |
+| 21 | **`count` 一变量两用**：帧分频 `(count+1)%3` 与转弯去抖 `count += 1` | `pipe2025_func.py:170`、`:235` | 「连续 3 帧」的语义不严格，实际行为取决于重置相位 |
+| 22 | **两个阶段的转弯触发不一致**：`_pipe1` 有 3 帧去抖，`_pipe2` 下降沿当帧即转 | `:233` vs `:361` | 一次单帧误检就能触发转弯 |
 | 23 | **PID 的 `dt` 硬编码 0.1**，而真实环周期是它的数倍 | `sheer_pid.py:33-42`、`set_deepth.py:30` | `dt` 恒定时 D 项退化成「第二个 P 项」，实际增益与设计值不符 |
 | 24 | **斜率 `m` 与拐角坐标 `angle_center` 算了不用** | `pipeline.py:151`、`detectpipeline.py:109` | 控制器只有位置环、没有航向环 |
 | 25 | **`m` 的零分母保护判 `box`、除法却用 `rect`**（两组不同的点） | `pipeline.py:148-151` | 保护失效；`float32` 除零得到 `inf/nan` 而非异常【推论】 |
 | 26 | **`patrol(img, False)` 会抛 `UnboundLocalError`**（`m`/`means` 未赋值） | `pipeline.py:188-194` | 目前恒传 `True`，属隐患 |
-| 27 | **`q_width` 的 put/get 不平衡**：中心为 `None` 时只 put 不 get | `pipe2025_func.py:197` | LIFO 下取值仍新鲜，但队列会无限增长 |
-| 28 | **模型路径是相对 CWD，与 README 的启动方式冲突** | `:81` vs `README.md:69` | 按 README 的 `cd main_process` 启动则模型加载失败；改用项目根启动则日志落到项目外（`:71` 的 `path='../'`）。两种启动方式必有一种错位 |
+| 27 | **`q_width` 的 put/get 不平衡**：中心为 `None` 时只 put 不 get | `pipe2025_func.py:192` | LIFO 下取值仍新鲜，但队列会无限增长 |
+| 28 | **模型路径是相对 CWD，与 README 的启动方式冲突** | `:76` vs `README.md:69` | 按 README 的 `cd main_process` 启动则模型加载失败；改用项目根启动则日志落到项目外（`:66` 的 `path='../'`）。两种启动方式必有一种错位 |
 | 29 | **模块级 `set_servo_angle` / `_claw_close` / `_claw_open` 引用了未定义的全局 `pwm`** | `:21-37` | 一旦调用即 `NameError`；好在主流程未调用 |
 | 30 | **两个 `PID` 类同名且连续 `import *`** | `:9-10` | 模块命名空间里的 `PID` 指向 `sheer_pid.PID`；已有实例不受影响，但极易埋坑 |
 | 31 | **`_turn_first` 与 `_turn_second` 逐字重复** | `:265-279`、`:380-395` | 只差状态名与末尾一句 `aim`，改一处必须记得改两处 |
