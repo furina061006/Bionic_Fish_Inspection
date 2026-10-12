@@ -179,13 +179,16 @@ v0.1 有一套「最弱一环打分 + `p > 3/8` 判决」的上报置信度。�
 
 ## 五、怎么跑
 
-环境是 conda 环境 `aquacore`（Python 3.10 + `numpy` + `opencv-python` + `pymavlink` + `PyYAML`）。
+环境是 conda 环境 `aquacore`（Python 3.10 + `numpy` + `opencv-python` + `PyYAML`）。
+`pymavlink` 在这个环境里已装，但 **`pyserial` / `RPi.GPIO` / `onnxruntime` 没有**——所以本机只能跑到仿真与测试，连真飞控那条路都缺 `pyserial`（`pymavlink` 不依赖它）。
 
 ```sh
 conda activate aquacore
 
-# 可编辑安装一次
+# 可编辑安装一次。开发机（只跑仿真）：
 pip install -e .
+# 上位机 / 树莓派（要真的连飞控、点 GPIO）：
+pip install -e ".[hardware,rpi]"
 
 # 仿真跑一趟 —— 没有相机、没有鱼也能跑完
 python -m sim.run_sim
@@ -198,6 +201,7 @@ python -m sim.run_sim --config tank.yaml
 
 # 实机（需要真相机与真飞控）
 python -m bionic_fish --device /dev/ttyACM0
+# 注意：不要用 `bionic-fish` 这个控制台脚本，它指向一个不存在的函数（见 backlog.md）
 
 # 跑测试（无需硬件）
 python -m unittest discover -s tests
@@ -247,12 +251,19 @@ python3 .dsh/tools/check-links.py .
 
 ## 七、现在到哪了
 
-**能跑**：感知、控制、状态机、上报决策、平台接口都已实现并有测试；合成场地上**偏左 30mm 起始可跑完全程，8/8 漏油点全部上报**。
+**能跑**：视觉、控制、状态机、上报决策、平台接口都已实现并有测试；合成场地上 0 与 ±30mm 三种起始条件**都能跑完全程、8/8 上报、约 25.4 秒**。
 
-**卡着**：全部按「缺什么 / 找谁 / 为什么卡」记在 [`backlog.md`](backlog.md)。最卡的三件——
+**卡着**：全部按「缺什么 / 找谁 / 为什么卡」记在 [`backlog.md`](backlog.md)。最卡的四件——
 
 1. 车体上有没有可用的**航向 / 姿态源**（决定弯角是按角度转还是退化为限时双向搜索）
 2. **实测动力学与平台接口**（决定占位数字能不能换成真值）
-3. **误识别点的判别特征**（决定检测项 40 分的净值）
+3. **误识别点的判别特征**（决定检测项 40 分的净值；默认配置实测 8 次上报只有 5 次命中真点）
+4. **落盘与可视化调试界面没有实现**（没有它，前面三件在现场都说不清）
 
-**别做的事**：不要对着 `plant.py` 的占位动力学调参。那不是在调系统，是在拟合虚构。
+**`params.py` 里 54 个字段标了 `【待验证·实机】`**，列出来：
+
+```sh
+grep -n "【待验证·实机】" src/bionic_fish/params.py
+```
+
+**别做的事**：不要对着 `sim/plant.py` 的占位动力学调参。那不是在调系统，是在拟合虚构。
