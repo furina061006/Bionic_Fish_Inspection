@@ -22,10 +22,11 @@
 | [`main.py`](../../src/bionic_fish/main.py) | 第 6 步按 `hasattr(link, "send_tail_fin")` 分叉，**合成只在这一处发生** |
 | [`__main__.py`](../../src/bionic_fish/__main__.py) | `--tail-fin`（默认）/ `--mavlink` 选后端；`--device` 覆写串口 |
 | [`params.py`](../../src/bionic_fish/params.py) | 尾鳍参数 8 个 + 两个派生量 `tail_fin_bias_scale` / `tail_fin_amp_scale`，并进 `check()` |
-| [`tests/test_logic.py`](../../tests/test_logic.py) | 新增 `TailFinTest` 14 条；全套 18 → **32** 条 |
+| [`tests/test_logic.py`](../../tests/test_logic.py) | 新增 `TailFinTest` **16** 条；全套 18 → **34** 条 |
 
-改动量（`git diff --numstat` + 新文件）：`fin.py` 170 行新文件；5 个源文件
-+312 / −20 行；`tests/test_logic.py` +240 行；5 份 Markdown 文档同步更新。
+改动量（`git show --stat cda9218`）：14 个文件 +1032 / −43 行。其中 `fin.py` 172 行
+（新文件）、5 个源文件、`tests/test_logic.py` +284 行（`TailFinTest` 16 条，
+全套 18 → 34）、6 份 Markdown 文档。
 
 数据流：
 
@@ -110,9 +111,9 @@ ZeroDivisionError: float division by zero     ← 在子线程里，主循环收
 ### 5. 新代码零回归测试（已补）
 
 `tests/test_logic.py` 当时仍是 18 条，没有一条碰合成或波形 —— 而耦合 12 是有文档的
-设计不变量。已补 `TailFinTest` 14 条：耦合会削推力、默认关闭、预算不越界、
-恒等映射、波形中心与摆幅、停摆回中位、坏参数拒绝启动、串口失败必须响、
-**`TailFinLink` 不许有第二条合成路径**。
+设计不变量。已补 `TailFinTest`（最终 16 条，第 16 条出自第四节的复审）：耦合会削推力、
+默认关闭、预算不越界、恒等映射、波形中心与摆幅、停摆回中位、坏参数拒绝启动、
+串口失败必须响、**`TailFinLink` 不许有第二条合成路径**、**走完整入口的端到端**。
 
 ### 6. 文档日期是编的（已改）
 
@@ -150,7 +151,70 @@ ZeroDivisionError: float division by zero     ← 在子线程里，主循环收
 
 ---
 
-## 四、还没解决的
+## 四、提交前复审又查出一处（第七处）：默认配置下实机入口必崩
+
+**提交前把所有改动重读了一遍**（不是重跑测试 —— 测试已经全绿了），查出一处
+**前面两轮自测都漏掉的真 bug**：
+
+```python
+# src/bionic_fish/__main__.py（修复前）
+print(f"[尾鳍模式] 摆动 ... 预算 {p.tail_fin_budget:g}（转向权重 ...）")
+```
+
+`tail_fin_budget` 默认是 **`None`**，而 `f"{None:g}"` 抛
+`TypeError: unsupported format string passed to NoneType.__format__`。
+
+**为什么两轮自测都没抓到**：崩点在**串口连上之后**的打印那一行，而
+
+- `--help` 在参数解析阶段就返回了，走不到那里；
+- 开发机上 `serial` 模块根本没装，`connect()` 在更早处返回 `False` → `SystemExit`
+  —— **「连不上就退出」这条路径恰好绕过了 bug**；
+- 单元测试一次都没调过 `__main__.cli()`，只测了 `TailFinLink.connect()`。
+
+也就是说：**这个 bug 只在真机上出现，而真机恰恰是唯一还没验证过的环境**。
+这正是「开发机的失败路径掩盖了真机的成功路径」这一类错误。
+
+**修法与防线**：
+
+1. 摘要行抽成 `_tail_fin_summary(p)`，`None` 打印成「关闭」；
+2. 补一条**走完整入口**的用例 `test_the_vehicle_entry_point_survives_the_default_config`
+   —— 用 `mock.patch` 换掉 `TailFinLink`（注入假串口）与 `Camera`，其余全走真代码：
+   参数加载 → 后端选择 → 摘要 → `run()` → `finally` 里的 `disarm`/`close`；
+3. **验证了这条用例真的能抓住它**：把 `f"{...:g}"` 那段临时放回去，用例 FAIL；
+   还原后 OK。不这么试一遍，就不知道防线是不是空的。
+
+复审同时清掉的小问题：
+
+| 问题 | 处理 |
+| --- | --- |
+| `fin.py:start()` 用整个 `p.check()` 当闸门 | 改成只挡会让线程崩的两条。否则一个无关字段（如 `camera_index`）出错会报成「波形参数非法」，把人引向错方向 |
+| `main.py` 的 Protocol 叫 `TailFinLink`，与 `link.TailFinLink` **完全同名** | 改名 `TailFin`，并在 docstring 里写明「运行时是 `link.TailFinLink`」 |
+| `params.py` 注释写「这四条」而实际有 8 条校验 | 改成「这几条」 |
+| `--tail-fin` 解析了却从不被读 | 加注释说明它只用于互斥报错（`--tail-fin --mavlink` 必须报错而不是静默二选一） |
+| 测试里混叠用例塞在坏参数循环里、带一个 `if` 特例 | 拆成独立的 `test_an_aliasing_wave_rate_is_rejected`；顺手清掉一处格式错乱 |
+| `backlog` 的 `[#4]` 标题还写「后端选型」 | 选型已定，改为「尾鳍参数标定与实物定型」 |
+
+**留下的教训**：`None` 是个会到处漏的默认值 —— 凡是 `X | None` 的字段，任何
+`f"{x:...}"` 都是一颗雷。复审时用 `grep` 把所有 `:g` / `:f` / `:d` 的格式化点过了一遍。
+
+---
+
+## 五、提交
+
+`cda9218`（分支 `dsh`，**未合并到 `main`**，按纪律要用户明确确认才合）。
+
+提交前跑过的四道闸门：
+
+```
+全量测试     34 条 OK（18 旧 + 16 尾鳍）
+文档链接     416 个相对链接全部可达
+仿真基线     到达终点 25.45s / 8 上报 / 5000mm  ← 与本次改动前的文档基线逐字一致
+编译         src/ sim/ tests/ 全部通过
+```
+
+---
+
+## 六、还没解决的
 
 - **仿真壳覆盖不到尾鳍路径**：`SimLink` 只有 `send(yaw, forward)`，所以 `sim/`
   走的仍是旧分叉（本次是靠日志外的反解适配器才测到闭环）。要真正覆盖，得先按
@@ -160,4 +224,9 @@ ZeroDivisionError: float division by zero     ← 在子线程里，主循环收
 - **下位机串口协议**（文本 / µs + `\n`）是**我们单方面定的**，下位机固件还没对过。
 - **树莓派上的线程抖动**未实测：100 Hz 的 `time.sleep` 在负载高时会漂，
   实测不够就降到 50–80 Hz 或换硬件 PWM。
-- **舵机只用到 28% 机械行程**（见上文第四节撤回段）：要不要放大摆幅是硬件问题。
+- **舵机只用到 28% 机械行程**（见第二节第 4 条撤回段）：要不要放大摆幅是硬件问题。
+- **波形线程没有看门狗**：`start()` 现在挡住了已知会崩的参数，但**未知异常仍会把线程
+  打死而不留痕迹** —— 主循环不查 `link` 是否还活着，四条硬终止也不管执行器。
+  真要堵死，得让 `main.py` 有一个「执行器还活着吗」的判据（第三个接口契约），
+  并按硬终止处理。本次没做，因为它是**新契约**，不该顺手塞进这一版。
+  ⚠️ 这条是**已知残留风险**，不是待办清单上的普通一项。
