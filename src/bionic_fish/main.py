@@ -26,7 +26,7 @@ from typing import Protocol
 
 import numpy as np
 
-from .drive import Pid, slew_forward, steer_offset
+from .drive import Pid, slew_forward, steer_offset, synthesize_tail_fin
 from .link import Annunciator
 from .params import Params
 from .vision import find_black_dot, find_white_pipe, is_tape
@@ -38,6 +38,18 @@ class Camera(Protocol):
 
 class Link(Protocol):
     def send(self, yaw_us: float, forward_us: float) -> None: ...
+
+
+class TailFin(Protocol):
+    """单关节尾鳍后端（运行时是 `link.TailFinLink`）。`main.py` 用 `hasattr` 认它。
+
+    故意**不叫** `TailFinLink` —— 那会和 `link.TailFinLink` 同名，读代码时分不清
+    哪个是契约、哪个是实现。
+
+    没有 `send(yaw, forward)`：合成只发生在 `main.py` 一处。
+    """
+
+    def send_tail_fin(self, amplitude: float, bias: float) -> None: ...
 
 
 @dataclass
@@ -237,8 +249,18 @@ def main(camera: Camera, link: Link, p: Params, annunciator: Annunciator | None 
             pid.hold(now)           # 保持上一帧的 yaw，只推进 PID 的时钟
 
         # 从当前值向目标值限速逼近，再发出去。全循环只有这一次对外。
+        #
+        # 两个后端，**只有这一处分叉**：
+        #   · 尾鳍：先把 yaw/forward 合成成一个关节指令 (摆幅, 偏置) —— 单关节
+        #     尾鳍的推力和转向出自同一个执行器，必须一起决策（耦合 12）
+        #   · 飞控 / 仿真：照旧发两根杆位
         forward = slew_forward(forward, target_forward, p, dt)
-        link.send(yaw, forward)
+
+        if hasattr(link, "send_tail_fin"):
+            amplitude, bias = synthesize_tail_fin(yaw, forward, p)
+            link.send_tail_fin(amplitude, bias)
+        else:
+            link.send(yaw, forward)
 
         if abs(forward - p.neutral) > p.started_forward_us:
             started = True

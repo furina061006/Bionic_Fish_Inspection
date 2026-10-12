@@ -296,5 +296,289 @@ class VisionTest(unittest.TestCase):
         self.assertFalse(is_tape(frame, pipe, self.p))
 
 
+# --------------------------------------------------------------------------- #
+
+class TailFinTest(unittest.TestCase):
+    """单关节尾鳍：合成（耦合 12）与波形。
+
+    耦合 12 是**同一个执行器被推力和转向争**，所以这里钉的不是「鱼开得好不好」，
+    而是「预算真的会触发」和「不触发时物理输出不变」两条结构性质。
+    """
+
+    def setUp(self) -> None:
+        self.p = params.load()
+
+    # ------------------------------------------------------------ 合成
+    def test_full_cruise_straight_does_not_touch_the_budget(self) -> None:
+        """巡航 + 不打舵：正好用满预算，不该被削。
+
+        这是整套参数的标定点 —— 它若被削，就等于「直着走也要减速」。
+        """
+        from bionic_fish.drive import synthesize_tail_fin
+
+        amp, bias = synthesize_tail_fin(self.p.neutral, self.p.cruise, self.p)
+        self.assertAlmostEqual(amp, 1.0, places=9)
+        self.assertAlmostEqual(bias, 0.0, places=9)
+
+    def test_rudder_costs_thrust(self) -> None:
+        """**耦合 12**：偏置越大，可用于推进的振幅越小。
+
+        这是「大舵量直接吃掉推力」。两个量纲若共用同一个分母（都取
+        `pwm_max - neutral`），满舵只占 5% 的量纲，预算永远不触发 —— 这条就会
+        变成一句空话（2026-10-13 实测：一整趟触发 0 帧）。
+
+        **必须显式打开预算**才测得到：默认是关的（见下面那条与 `params.py`）。
+        """
+        from bionic_fish.drive import synthesize_tail_fin
+
+        p = dataclasses.replace(self.p, tail_fin_budget=1.5)
+        straight, _ = synthesize_tail_fin(p.neutral, p.cruise, p)
+        turning, _ = synthesize_tail_fin(p.neutral + p.clamp_us, p.cruise, p)
+        self.assertLess(turning, straight, "打了满舵就必须少摆一点")
+
+    def test_the_budget_is_off_by_default_and_that_is_deliberate(self) -> None:
+        """默认**不削**任何指令。关掉是刻意的，不是没实现。
+
+        2026-10-13 实测：耦合真正生效（budget=1.0 / 1.5）之后，合成场地的闭环在
+        弯角转不过去、20 秒左右触发「完全脱离路线 >10 秒」。原因清楚
+        （`corner_turn_us` 就是满舵，弯角必然是满舵 + 减速，一进预算就被削），
+        但 `sim/plant.py` 的动力学**已知是错的**（推力与转向当两个独立轴），
+        所以不能拿它整定 —— 于是机器留着、默认关着，等实测。
+
+        这条用例的作用是**防止有人悄悄把默认值打开**：一旦打开，闭环就从
+        「到达终点」变成硬终止。
+        """
+        from bionic_fish.drive import synthesize_tail_fin
+
+        p = self.p
+        self.assertIsNone(p.tail_fin_budget, "默认必须是关闭")
+        amp, bias = synthesize_tail_fin(p.neutral + p.clamp_us, p.cruise, p)
+        self.assertAlmostEqual(bias, 1.0, places=9, msg="满舵不许被削")
+        self.assertAlmostEqual(amp, 1.0, places=9, msg="满推力不许被削")
+
+    def test_the_budget_is_never_exceeded(self) -> None:
+        """打开预算后，任何输入（含远超量程的）都不许超预算。"""
+        from bionic_fish.drive import synthesize_tail_fin
+
+        p = dataclasses.replace(self.p, tail_fin_budget=1.5)
+        for yaw in (1100, 1400, 1500, 1520, 1700, 1900):
+            for fwd in (1100, 1500, 1590, 1800, 1900):
+                amp, bias = synthesize_tail_fin(yaw, fwd, p)
+                demand = abs(bias) * p.tail_fin_yaw_weight + abs(amp)
+                self.assertLessEqual(
+                    demand, p.tail_fin_budget + 1e-9, f"yaw={yaw} fwd={fwd}"
+                )
+                self.assertLessEqual(abs(bias), 1.0 + 1e-9)
+                self.assertLessEqual(abs(amp), 1.0 + 1e-9)
+
+    def test_unscaled_synthesis_reproduces_the_joint_command(self) -> None:
+        """不触发预算时，关节指令必须正好是「中心 = `yaw`、摆幅 = `forward - neutral`」。
+
+        这条钉住的是**两套量纲的分母必须分别乘回去**：把归一化后的两个数加在一起
+        再乘同一根 400µs 的刻度，偏置会被放大到振幅的量级（满舵变成 400µs 而不是
+        20µs），舵机会被指令打到行程边缘。
+        """
+        from bionic_fish.drive import synthesize_tail_fin
+        from bionic_fish.fin import RecordingSerial, TailFinWaveform
+
+        p = self.p
+        yaw = p.neutral + 5.0                      # 小舵量，不触发预算
+        amp, bias = synthesize_tail_fin(yaw, p.cruise, p)
+
+        wave = TailFinWaveform(p, RecordingSerial())
+        wave.update_target(amp, bias)
+
+        # sin = 0 处就是摆动中心 → 必须正好是 yaw
+        self.assertEqual(wave.pwm_at(0.0), int(round(yaw)))
+        # sin = 1 处 → yaw + (forward - neutral)
+        quarter = 1.0 / (4.0 * p.tail_fin_freq_hz)
+        self.assertEqual(wave.pwm_at(quarter), p.neutral + 5 + (p.cruise - p.neutral))
+
+    def test_the_budget_binds_at_full_thrust_plus_full_rudder(self) -> None:
+        """打开预算时，满推力 + 满舵必须**正好**把预算用满（而不是还剩 70%）。"""
+        from bionic_fish.drive import synthesize_tail_fin
+
+        p = dataclasses.replace(self.p, tail_fin_budget=1.5)
+        amp, bias = synthesize_tail_fin(p.neutral + p.clamp_us, p.cruise, p)
+        demand = abs(bias) * p.tail_fin_yaw_weight + abs(amp)
+        self.assertAlmostEqual(demand, p.tail_fin_budget, places=9)
+        self.assertLess(amp, 1.0)
+
+    # ------------------------------------------------------------ 波形
+    def test_the_waveform_swings_around_the_bias(self) -> None:
+        """波形真的在摆，而且摆幅/中心与给出的目标一致。"""
+        import time
+
+        from bionic_fish.fin import RecordingSerial, TailFinWaveform
+
+        p = dataclasses.replace(
+            self.p, tail_fin_freq_hz=10.0, tail_fin_wave_rate_hz=200.0
+        )
+        serial = RecordingSerial()
+        wave = TailFinWaveform(p, serial)
+        wave.update_target(amplitude=1.0, bias=0.0)
+        self.assertTrue(wave.start())
+        time.sleep(0.25)                     # 10 Hz → 约 2.5 个周期
+        wave.stop()
+
+        pwms = serial.pwms()
+        self.assertGreater(len(pwms), 20, "波形线程必须真的在发")
+        self.assertGreaterEqual(min(pwms), p.pwm_min)
+        self.assertLessEqual(max(pwms), p.pwm_max)
+        # 中心 = neutral + bias*scale = 1500；摆幅 = ±amp_scale = ±90
+        self.assertAlmostEqual((min(pwms) + max(pwms)) / 2, p.neutral, delta=6)
+        self.assertAlmostEqual(max(pwms) - min(pwms), 2 * p.tail_fin_amp_scale, delta=12)
+
+    def test_stopping_returns_the_joint_to_neutral(self) -> None:
+        """停摆时舵机不许停在一个偏置上 —— 那会让鱼一直往一边画圈。"""
+        import time
+
+        from bionic_fish.fin import RecordingSerial, TailFinWaveform
+
+        p = dataclasses.replace(
+            self.p, tail_fin_freq_hz=10.0, tail_fin_wave_rate_hz=200.0
+        )
+        serial = RecordingSerial()
+        wave = TailFinWaveform(p, serial)
+        wave.update_target(amplitude=1.0, bias=0.5)     # 明确偏离中位
+        wave.start()
+        time.sleep(0.1)
+        wave.stop()
+        self.assertEqual(serial.pwms()[-1], p.neutral)
+
+    def test_the_waveform_refuses_to_start_on_a_bad_rate(self) -> None:
+        """坏参数必须**拒绝启动**，而不是起一个必然除零死掉的线程。
+
+        线程里除零的后果特别隐蔽：主循环照样跑完、四条硬终止照样成立、`Result`
+        漂漂亮亮，而舵机一帧都没收到。
+        """
+        from bionic_fish.fin import RecordingSerial, TailFinWaveform
+
+        p = dataclasses.replace(self.p, tail_fin_wave_rate_hz=0.0)
+        wave = TailFinWaveform(p, RecordingSerial())
+        self.assertFalse(wave.start())
+        self.assertIsNone(wave._thread)
+
+    # ------------------------------------------------------ 串口失败必须响
+    def test_a_missing_serial_is_reported_not_swallowed(self) -> None:
+        """串口打不开时 `connect()` 必须返回 `False`。
+
+        **不许退回「假装发送」**：那会让真机上串口接错变成「跑完全程、日志漂亮、
+        舵机一动不动」，而且没有任何征兆 —— 与「不解锁就跑等于白跑」是同一条。
+        """
+        from bionic_fish.link import TailFinLink
+
+        p = dataclasses.replace(
+            self.p, tail_fin_serial_device="/dev/definitely-not-a-tail-fin"
+        )
+        link = TailFinLink(p)
+        try:
+            self.assertFalse(link.connect())
+            self.assertIsNotNone(link.last_error, "失败必须留下原因")
+        finally:
+            link.close()
+
+    def test_an_injected_serial_connects_without_touching_the_hardware(self) -> None:
+        """显式注入串口（测试 / 仿真）时不碰真硬件，但仍然要起波形线程。"""
+        import time
+
+        from bionic_fish.fin import RecordingSerial
+        from bionic_fish.link import TailFinLink
+
+        serial = RecordingSerial()
+        link = TailFinLink(self.p, serial_port=serial)
+        try:
+            self.assertTrue(link.connect())
+            self.assertIsNone(link.last_error)
+            link.send_tail_fin(amplitude=1.0, bias=0.0)
+            time.sleep(0.1)
+            self.assertGreater(len(serial.written), 0)
+        finally:
+            link.close()
+        self.assertEqual(serial.pwms()[-1], self.p.neutral)
+
+    def test_tail_fin_link_has_no_second_synthesis_path(self) -> None:
+        """`TailFinLink` 故意**不**提供 `send(yaw, forward)`。
+
+        有两条合成路径，就会有两套行为，迟早漂移成「主循环以为发了 A、后端发了 B」。
+        合成只允许发生在 `main.py` 一处。
+        """
+        from bionic_fish.link import TailFinLink
+
+        self.assertFalse(hasattr(TailFinLink, "send"))
+
+    # ------------------------------------------------------------ 参数校验
+    def test_bad_tail_fin_parameters_are_rejected(self) -> None:
+        """坏参数必须在加载期报错，而不是跑到一半行为怪。"""
+        for field, bad in [
+            ("tail_fin_budget", 0.0),
+            ("tail_fin_budget", -1.0),
+            ("tail_fin_yaw_weight", -0.5),
+            ("tail_fin_freq_hz", 0.0),
+            ("tail_fin_freq_hz", -3.0),
+            ("tail_fin_wave_rate_hz", 0.0),
+            ("tail_fin_serial_baud", 0),
+            ("tail_fin_bias_full_us", 0.0),
+            ("tail_fin_amp_full_us", -1.0),
+        ]:
+            p = dataclasses.replace(self.p, **{field: bad})
+            with self.assertRaises(ValueError, msg=f"{field}={bad} 被放过了"):
+                p.check()
+
+    def test_an_aliasing_wave_rate_is_rejected(self) -> None:
+        """波形更新率不足两倍摆动频率时拒绝 —— 那出来的不是正弦，是混叠。"""
+        p = dataclasses.replace(self.p, tail_fin_freq_hz=60.0, tail_fin_wave_rate_hz=100.0)
+        with self.assertRaises(ValueError, msg="60Hz 摆动配 100Hz 更新率被放过了"):
+            p.check()
+
+    def test_the_default_config_is_self_consistent(self) -> None:
+        """默认值必须过 `check()`，而且两个满量程基准取到该取的字段。"""
+        p = params.load()
+        self.assertEqual(p.tail_fin_bias_scale, p.clamp_us)
+        self.assertEqual(p.tail_fin_amp_scale, float(p.cruise - p.neutral))
+
+    # -------------------------------------------------- 实机入口的成功路径
+    def test_the_vehicle_entry_point_survives_the_default_config(self) -> None:
+        """`python -m bionic_fish` 必须能走通到启动摘要那一行。
+
+        这条是**踩出来的**：`tail_fin_budget` 默认是 `None`，而摘要行最初写成
+        `f"{p.tail_fin_budget:g}"` → `TypeError: unsupported format string passed
+        to NoneType.__format__`。崩点在**串口连上之后**，所以「连不上就退出」与
+        `--help` 两条路径都测不到它 —— 而真机上串口是通的，一跑就崩。
+
+        所以这里必须走**完整入口**：换掉串口、换掉相机，其余（参数加载、后端选择、
+        摘要、`run()`、`finally` 里的 disarm/close）全用真代码。
+        """
+        import contextlib
+        import io
+
+        import bionic_fish.__main__ as entry
+
+        from bionic_fish.fin import RecordingSerial
+        from bionic_fish.link import TailFinLink
+
+        serial = RecordingSerial()
+
+        class InjectedSerial(TailFinLink):
+            def __init__(self, p):
+                super().__init__(p, serial_port=serial)
+
+        class InjectedCamera(FixedCamera):
+            """真 `Camera` 有 `close()`，入口的 `finally` 会调它。"""
+
+            def close(self) -> None:
+                pass
+
+        with mock.patch.object(entry, "TailFinLink", InjectedSerial), \
+                mock.patch.object(entry, "Camera", lambda index: InjectedCamera()), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            code = entry.cli([])
+
+        self.assertEqual(code, 0)
+        self.assertIn("预算 关闭", out.getvalue(), "默认预算应打印成「关闭」而不是崩掉")
+        self.assertGreater(len(serial.written), 0, "波形线程必须真的发过帧")
+        self.assertEqual(serial.pwms()[-1], params.load().neutral, "退出时必须回中位")
+
+
 if __name__ == "__main__":
     unittest.main()

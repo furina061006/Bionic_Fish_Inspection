@@ -242,6 +242,61 @@ class Params:
     # 【待验证·实机】等 ACK 的时长：按实测飞控回执延迟（参考项目没测过）
     ack_timeout_s: float = 5.0
 
+    # ===================== 单关节尾鳍合成 =====================
+    #
+    # 合成把 `yaw`（转向）与 `forward`（推力）压成一个关节指令。两路**量纲不同**，
+    # 所以各有各的满量程基准 —— 这是这套参数最容易搞错的地方：
+    #
+    #     偏置（转向）= (yaw - neutral) / tail_fin_bias_full_us     满舵 → 1.0
+    #     振幅（推力）= (forward - neutral) / tail_fin_amp_full_us  巡航 → 1.0
+    #
+    # 两个基准**不能合成一个**。用同一个基准（例如都用 `pwm_max - neutral = 400`）
+    # 会让满舵只占 20/400 = 5% 的量纲，于是预算约束永远不触发、
+    # 「大舵量吃掉推力」这个耦合等于没实现（2026-10-13 实测：一整趟触发 0 帧）。
+    #
+    # 预算约束（耦合 12）：
+    #
+    #     |偏置| * yaw_weight + |振幅| <= budget      （budget 非 None 时）
+    #
+    # 超了就按比例一起缩。三个区间（以 `yaw_weight = 1.5` 为例）：
+    #
+    #     budget = 1.0   满推力独占预算 → **一打舵就削推力**（5µs 的小修正也要削 27%）
+    #     budget = 1.5   小修正不削；满推力 + 满舵削到 0.6
+    #     budget >= 2.5  永不触发 → 与 `None` 等价
+    #
+    # **默认 `None`（关闭）是刻意的，不是偷懒。** 2026-10-13 实测：把 budget 设成
+    # 1.0 / 1.5 让耦合真正生效之后，合成场地的闭环在弯角处**转不过去**，20 秒左右
+    # 就触发第一条硬终止（完全脱离路线 >10 秒）；只有关掉耦合才跑得完全程。
+    # 原因清楚：`corner_turn_us` 就是满舵，弯角又是「满舵 + 减速」，一进预算就被
+    # 按比例削，而占位动力学需要那个舵量才转得动。
+    # 但 `sim/plant.py` 那份动力学**已知是错的**（它把推力与转向当两个独立轴），
+    # 所以不能拿它当整定依据（红线：不许对着占位数字调参）。于是：
+    # **机器保留、默认关闭、等实测「转向 + 推力」权衡曲线之后再定这个数。**
+    #: 预算上限。`None` = 关闭耦合；正数才启用。
+    # 【待验证·实机】预算上限：按实测「转向+推力」权衡曲线定
+    # （关闭的理由与实测数据见 `.dsh/logs/2026-10-13-tail-fin-implementation.md`）
+    tail_fin_budget: float | None = None
+    #: 尾鳍摆动频率，Hz。
+    # 【待验证·实机】摆动频率：按实测推力响应与效率定
+    tail_fin_freq_hz: float = 3.0
+    #: 转向在预算里的权重（相对推力）。越大越保转向、越牺牲推力。
+    # 【待验证·实机】转向权重：按实测偏航响应 vs 推力需求定
+    tail_fin_yaw_weight: float = 1.5
+    #: 满舵对应的舵量偏移，微秒。`None` = 取 `clamp_us`（舵量的实际上限）。
+    # 【待验证·实机】满舵基准：按实测舵机-转向力矩曲线定
+    tail_fin_bias_full_us: float | None = None
+    #: 满推力对应的前进量偏移，微秒。`None` = 取 `cruise - neutral`。
+    # 【待验证·实机】满推力基准：按实测「振幅 → 推力」曲线定
+    tail_fin_amp_full_us: float | None = None
+    #: 波形生成线程的更新频率，Hz。必须 > 2 * tail_fin_freq_hz，否则波形混叠。
+    tail_fin_wave_rate_hz: float = 100.0
+    #: 下位机串口设备节点。
+    # 【待验证·实机】下位机串口：按实际接线
+    tail_fin_serial_device: str = "/dev/ttyUSB0"
+    #: 下位机串口波特率。
+    # 【待验证·实机】串口波特率：按下位机固件
+    tail_fin_serial_baud: int = 115200
+
     # ====================== 由上面的量算出来的 ======================
 
     @property
@@ -271,6 +326,20 @@ class Params:
     def clamp(self, pwm: float) -> int:
         return int(max(self.pwm_min, min(self.pwm_max, round(pwm))))
 
+    @property
+    def tail_fin_bias_scale(self) -> float:
+        """满舵对应的舵量偏移，微秒。合成的分母之一。"""
+        if self.tail_fin_bias_full_us is not None:
+            return float(self.tail_fin_bias_full_us)
+        return float(self.clamp_us)
+
+    @property
+    def tail_fin_amp_scale(self) -> float:
+        """满推力对应的前进量偏移，微秒。合成的另一个分母。"""
+        if self.tail_fin_amp_full_us is not None:
+            return float(self.tail_fin_amp_full_us)
+        return float(self.cruise - self.neutral)
+
     def check(self) -> None:
         """自相矛盾的配置在加载期就报错，而不是跑到一半行为怪。"""
         if self.ch_yaw == self.ch_forward:
@@ -281,6 +350,29 @@ class Params:
             raise ValueError("camera_index must not be negative")
         if self.lost_timeout_s >= self.run_timeout_s:
             raise ValueError("lost_timeout_s must be below run_timeout_s")
+
+        # 尾鳍。这几条不是洁癖：波形线程里一个除零或负频率只会把线程悄悄打死，
+        # 主循环照样跑完全程、四条硬终止照样成立，而舵机一动不动。
+        if self.tail_fin_bias_scale <= 0.0:
+            raise ValueError("tail_fin_bias_scale must be positive")
+        if self.tail_fin_amp_scale <= 0.0:
+            raise ValueError("tail_fin_amp_scale must be positive")
+        if self.tail_fin_budget is not None and self.tail_fin_budget <= 0.0:
+            raise ValueError("tail_fin_budget must be positive or None (= off)")
+        if self.tail_fin_yaw_weight < 0.0:
+            raise ValueError("tail_fin_yaw_weight must not be negative")
+        if self.tail_fin_freq_hz <= 0.0:
+            raise ValueError("tail_fin_freq_hz must be positive")
+        if self.tail_fin_wave_rate_hz <= 0.0:
+            raise ValueError("tail_fin_wave_rate_hz must be positive")
+        if self.tail_fin_freq_hz * 2.0 > self.tail_fin_wave_rate_hz:
+            raise ValueError(
+                f"tail_fin_freq_hz={self.tail_fin_freq_hz:g} needs "
+                f"tail_fin_wave_rate_hz > {self.tail_fin_freq_hz * 2:g} "
+                "(otherwise the waveform aliases)"
+            )
+        if self.tail_fin_serial_baud <= 0:
+            raise ValueError("tail_fin_serial_baud must be positive")
 
 
 def load(path: str | Path | None = None) -> Params:

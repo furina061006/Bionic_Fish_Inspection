@@ -110,3 +110,57 @@ def slew_forward(current_us: float, target_us: float, p: Params, dt_s: float) ->
     if abs(delta) > rate:
         delta = math.copysign(rate, delta)
     return current_us + delta
+
+
+def synthesize_tail_fin(yaw_us: float, forward_us: float, p: Params) -> tuple[float, float]:
+    """单关节尾鳍合成：yaw + forward → (amplitude, bias)。**方案B：预算约束。**
+
+    物理依据（`.dsh/agents/hardware.md` 与 `.dsh/agents/architecture.md` 耦合 12）：
+
+    - 尾摆**振幅** → 推力
+    - 尾摆**偏置** → 转向力矩
+    - 偏置越大，可用于推进的摆动越少 → **大舵量直接吃掉推力**
+
+    所以两者必须**一起**决策，不能各算各的。这里用「预算」近似那个竞争：
+
+        |偏置| * tail_fin_yaw_weight + |振幅| <= tail_fin_budget
+
+    超预算就按比例一起缩。**注意两个量纲的分母不同**
+    （`tail_fin_bias_scale` 对满舵、`tail_fin_amp_scale` 对满推力）——
+    分母相同会让预算永远不触发，这条耦合就成了一句空话
+    （2026-10-13 实测：旧写法一整趟触发 0 帧）。
+
+    `tail_fin_budget = None`（**默认**）时不做缩放，本函数就是**恒等映射**：
+    `fin.py` 用同样的两个基准反算回去，关节指令正好是
+    「中心 = `yaw`、摆幅 = `forward - neutral`」。默认关掉的理由见 `params.py`
+    里 `tail_fin_budget` 的注释：耦合真正生效之后合成场地过不了弯角。
+
+    Args:
+        yaw_us: 期望舵量（PWM 微秒，含中位）
+        forward_us: 期望前进量（PWM 微秒，含中位）
+        p: 参数
+
+    Returns:
+        `(amplitude, bias)`，都归一化到 [-1, 1]（缩放过一定在范围内）：
+        振幅交给波形生成器当摆幅，偏置当摆动中心。
+    """
+    bias_scale = max(1e-9, p.tail_fin_bias_scale)
+    amp_scale = max(1e-9, p.tail_fin_amp_scale)
+
+    bias = (yaw_us - p.neutral) / bias_scale
+    amplitude = (forward_us - p.neutral) / amp_scale
+
+    # 需求超过满量程时先夹住，否则预算缩放会被一个离谱的输入抵消掉。
+    bias = max(-1.0, min(1.0, bias))
+    amplitude = max(-1.0, min(1.0, amplitude))
+
+    # `tail_fin_budget = None` = 关闭耦合（默认）。理由见 `params.py`：耦合真正生效
+    # 之后合成场地的闭环过不了弯角，而那份动力学已知是错的，不能拿它整定。
+    if p.tail_fin_budget is not None:
+        demand = abs(bias) * p.tail_fin_yaw_weight + abs(amplitude)
+        if demand > p.tail_fin_budget:
+            scale = p.tail_fin_budget / demand
+            bias *= scale
+            amplitude *= scale
+
+    return amplitude, bias

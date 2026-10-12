@@ -1,7 +1,9 @@
-"""出：把两个数字发给飞控，以及亮灯 / 响蜂鸣 / 播报。
+"""出：把一个指令发给飞控或尾鳍，以及亮灯 / 响蜂鸣 / 播报。
 
 这是通向外界的**两个口之一**（另一个是 `camera.py`）。核心只要求对象有
-`send(yaw_us, forward_us)`，所以 `sim/` 能塞一个记录器进来而不改任何逻辑。
+`send(yaw_us, forward_us)`（`MavlinkLink` / 仿真的 `SimLink`）或
+`send_tail_fin(amplitude, bias)`（`TailFinLink`）—— `main.py` 按 `hasattr` 选，
+所以两个后端与 `sim/` 都不需要改任何状态逻辑。
 
 两条从参考项目继承时必须改掉的习惯：
 
@@ -9,12 +11,18 @@
    `disarm()` 里各开一条，三个对象抢同一串口的心跳。MAVLink 流只有一个读者。
 2. **解锁要校验回执。** 参考项目把 `motors_armed_wait()` 注释掉、**无条件打印
    `Armed!`**，解锁失败会静默继续。
+
+单关节尾鳍：
+- `TailFinLink`：收 `(amplitude, bias)`，交给 `fin.py` 的波形线程
+- 合成在 `drive.py` 的 `synthesize_tail_fin()`，**由 `main.py` 调**
+  （`TailFinLink` 故意**不**提供 `send(yaw, forward)`：两条合成路径迟早漂移）
 """
 
 from __future__ import annotations
 
 from typing import Protocol
 
+from .fin import SerialPort, TailFinWaveform, open_serial
 from .params import Params
 
 #: RC_CHANNELS_OVERRIDE 里「不覆盖这个通道」的取值。
@@ -232,3 +240,66 @@ class Annunciator:
         if self._buzzer_off_at is not None and now_s >= self._buzzer_off_at:
             self.gpio.write(self.p.buzzer_pin, False)
             self._buzzer_off_at = None
+
+
+# --------------------------------------------------------------------------- #
+# 单关节尾鳍接口
+# --------------------------------------------------------------------------- #
+
+
+class TailFinLink:
+    """单关节尾鳍：接收 `(amplitude, bias)`，交给波形生成器发给下位机。
+
+    与 `MavlinkLink` 同一个形状（`connect` / `arm` / `disarm` / `close`），
+    但对外的方法叫 `send_tail_fin` —— `main.py` 靠它选分支
+    （**只有这一个方法**，故意不提供 `send(yaw, forward)`：有两条合成路径
+    迟早会漂移成两种行为）。
+
+    波形在独立线程里生成（~100 Hz），所以主循环只管更新目标，不会阻塞。
+    """
+
+    def __init__(self, p: Params, serial_port: SerialPort | None = None) -> None:
+        self.p = p
+        self.last_error: str | None = None
+        #: 显式传进来（测试 / 仿真）就不去开真串口。
+        self._serial = serial_port
+        self._waveform = TailFinWaveform(p, serial_port)
+
+    def connect(self) -> bool:
+        """开串口并启动波形线程。任一步失败都返回 `False` 并写 `last_error`。
+
+        **串口打不开不是可以降级的事**：没有它，本程序会跑完一整趟、四条硬终止
+        全部正常、`Result` 漂漂亮亮，而舵机一帧都没收到。所以这里跟
+        `MavlinkLink.connect()` 一样，失败得响 —— 由调用方决定怎么办。
+        """
+        if self._serial is None:
+            try:
+                self._serial = open_serial(self.p)
+            except Exception as exc:  # noqa: BLE001 - 任何驱动失败都算「报告型的失败」
+                self.last_error = f"{type(exc).__name__}: {exc}"
+                return False
+            # 串口是这一刻才有的，重建一个绑上它的波形对象（线程还没起，安全）。
+            self._waveform = TailFinWaveform(self.p, self._serial)
+
+        if not self._waveform.start():
+            self.last_error = "波形参数非法（tail_fin_freq_hz / tail_fin_wave_rate_hz）"
+            return False
+        self.last_error = None
+        return True
+
+    def arm(self) -> bool:
+        """空操作。尾鳍没有飞控那样的解锁状态，恒为 `True`（保留只为形状一致）。"""
+        return True
+
+    def disarm(self) -> None:
+        """停波形并把关节送回中位 —— 与飞控上锁同一条安全要求。"""
+        self._waveform.stop()
+
+    def send_tail_fin(self, amplitude: float, bias: float) -> None:
+        """更新目标：摆幅与摆动中心，都归一化（1.0 = 满推力 / 满舵）。"""
+        self._waveform.update_target(amplitude, bias)
+
+    def close(self) -> None:
+        """停波形并释放串口。"""
+        self._waveform.close()
+

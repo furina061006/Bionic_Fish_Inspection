@@ -154,10 +154,11 @@ python3 .dsh/tools/check-links.py .
 | `main.py` | **主循环。鱼的行为全在这里** | 一帧 7 步，第一条就是四条硬终止，任何状态逻辑绕不过去。它**不知道自己在哪跑** |
 | `params.py` | 全部可调参数，默认值照参考项目；平的 YAML 覆写 | 一个 `Params` dataclass，没有 11 层抽象。`check()` 在加载期拒绝自相矛盾的配置 |
 | `vision.py` | 看：`find_white_pipe` / `find_black_dot` / `is_tape` | top-hat 分割抗光照梯度；游程宽度窗口挡住管顶镜面高光带；黑带用**绝对暗度**（黑帽在亮结构边缘也会响应） |
-| `drive.py` | `Pid`（实测 dt、显式抗饱和）+ 期望航向 + 限斜率 | 内环误差是 **`e_theta + 修正量`**，不是差 —— 写成差会让航向环变正反馈，而直道测试看不出来 |
-| `link.py` | 出：`MavlinkLink` + `Annunciator`（灯 / 蜂鸣 / 播报） | 只开一条 MAVLink 连接；解锁校验 `COMMAND_ACK`；声光非阻塞 |
+| `drive.py` | `Pid`（实测 dt、显式抗饱和）+ 期望航向 + 限斜率 + **尾鳍合成** | 内环误差是 **`e_theta + 修正量`**，不是差 —— 写成差会让航向环变正反馈，而直道测试看不出来。`synthesize_tail_fin()` 把 `yaw + forward` 压成一个关节指令 |
+| `fin.py` | 单关节尾鳍的**波形线程**：`(摆幅, 偏置)` → 串口 PWM | 主循环 15–30 fps 做不出 3 Hz 平滑尾摆，所以相位推进在独立线程（默认 100 Hz）。`open_serial` 打不开就抛，**没有「假装发送」兜底** |
+| `link.py` | 出：`TailFinLink`（默认）+ `MavlinkLink` + `Annunciator`（灯 / 蜂鸣 / 播报） | 尾鳍只对外给 `send_tail_fin`（合成只在 `main.py` 一处）；飞控只开一条 MAVLink 连接、解锁校验 `COMMAND_ACK` |
 | `camera.py` | 进：`Camera` | 两个口之一。时间戳用 `time.monotonic` |
-| `__main__.py` | 实机入口：连接 → 解锁 → `main()` → **上锁** | `disarm` 放 `finally` 是安全要求；解锁被拒直接退出，不降级 |
+| `__main__.py` | 实机入口：连接 → 解锁 → `main()` → **上锁** | `disarm` 放 `finally` 是安全要求；连接被拒直接退出，**不降级**（尾鳍后端也是） |
 
 仿真壳在仓库根的 `sim/`，**不入包**：`arena.py`（合成场地）、`plant.py`（占位动力学）、
 `harness.py`（假相机 + 假飞控）、`run_sim.py`（入口）。
@@ -199,8 +200,11 @@ python -m sim.run_sim --lateral-mm -30
 # 用一份参数覆写跑（平的 YAML，键名就是 params.py 的字段名）
 python -m sim.run_sim --config tank.yaml
 
-# 实机（需要真相机与真飞控）
-python -m bionic_fish --device /dev/ttyACM0
+# 实机（默认：单关节尾鳍，走串口直连下位机；需要真相机与下位机）
+python -m bionic_fish --device /dev/ttyUSB0
+
+# 实机（旧 MAVLink 飞控后端，仍保留但通道号未确认）
+python -m bionic_fish --mavlink --device /dev/ttyACM0
 # 注意：不要用 `bionic-fish` 这个控制台脚本，它指向一个不存在的函数（见 backlog.md）
 
 # 跑测试（无需硬件）
@@ -213,7 +217,7 @@ python3 .dsh/tools/check-links.py .
 
 **注意**：测试用标准库 `unittest`，**不是 pytest**。不要用 `python -m unittest tests/xxx.py` 那种写法——它会把 `tests/` 当包导入，而它不是包。
 
-当前状态：**18 个测试通过**。仿真下 0 与 ±30mm 三种起始条件都能跑完全程、8/8 上报。
+当前状态：**32 个测试通过**（18 条主循环逻辑 + 14 条尾鳍）。仿真下 0 与 ±30mm 三种起始条件都能跑完全程、8/8 上报。
 
 ### 没有硬件时会发生什么
 
@@ -260,7 +264,7 @@ python3 .dsh/tools/check-links.py .
 3. **误识别点的判别特征**（决定检测项 40 分的净值；默认配置实测 8 次上报只有 5 次命中真点）
 4. **落盘与可视化调试界面没有实现**（没有它，前面三件在现场都说不清）
 
-**`params.py` 里 54 个字段标了 `【待验证·实机】`**，列出来：
+**`params.py` 里 63 个字段标了 `【待验证·实机】`**，列出来：
 
 ```sh
 grep -n "【待验证·实机】" src/bionic_fish/params.py

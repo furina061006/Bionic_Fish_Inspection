@@ -51,12 +51,17 @@ sim/                    ← 仿真壳，不入包
 
 ```
 帧源   camera.read()            -> (时间戳, 帧)  或 None
-出口   link.send(yaw, forward)                   两个 PWM
+出口   link.send(yaw, forward)                   两根杆位（飞控 / 仿真壳）
+   或  link.send_tail_fin(amplitude, bias)       一个关节指令（尾鳍，默认）
 ```
 
-【事实】**核心不知道自己在哪跑**。实机塞 `Camera` + `MavlinkLink`，仿真塞
-`FakeCamera` + `SimLink`。逻辑一行不改 —— 参考项目做不到这件事，因为它把
-`cv2.VideoCapture` 和全局 MAVLink 写死在函数里。
+【事实】**核心不知道自己在哪跑**。实机塞 `Camera` + `TailFinLink`（默认）或
+`MavlinkLink`，仿真塞 `FakeCamera` + `SimLink`。逻辑一行不改 —— 参考项目做不到这件事，
+因为它把 `cv2.VideoCapture` 和全局 MAVLink 写死在函数里。
+
+【事实】出口的**分叉只有一处**（第 6 步末尾，按 `hasattr(link, "send_tail_fin")` 判）；
+两个后端各自接什么、串口协议是什么，见 [hardware](hardware.md) 的「执行器」与
+「与另一部分的接口」两节。
 
 时间戳由**帧源**给（实机是 `time.monotonic`，仿真用虚拟时钟），核心不自己取当前
 时间。所以仿真是确定性的，而且跑得比实时快。
